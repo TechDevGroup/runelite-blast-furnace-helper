@@ -43,34 +43,47 @@ Additional behaviour (highlight-only, no automation):
 `BFPolicy.derive(BFStateSnapshot)` is a pure, idempotent function: given only the current
 observed state it returns exactly one next action. It keeps no step index, so it is
 self-correcting — the same state always yields the same suggestion regardless of how you got
-there. Inputs: coal in furnace (varbit 949), this bar type's ore/bar counts in the furnace,
-dispenser state (varbit 936), inventory coal/ore/bar counts and free slots, coal-bag contents,
-and coffer balance. Priority order:
+there. Inputs: **location context** (bank interface open, and belt/bank proximity), coal in
+furnace (varbit 949), this bar type's ore/bar counts in the furnace, dispenser state (varbit
+936), inventory coal/ore/bar counts and free slots, coal-bag contents, and coffer balance.
+
+The loop is **location-aware** — a coal-bag *fill* and a belt *deposit* are easy to confuse
+because both consume inventory coal, but they happen at different stations. Fills and
+withdrawals are only ever recommended at the bank; deposits and bag-empties only at the belt.
+
+Priority order:
 
 1. **Coffer critical** — withdraw coins (bank) or deposit them into the coffer (holding coins); the furnace halts when the coffer empties.
 2. **Bars already in inventory** → deposit at bank.
-3. **Bank open** → acquire the next material under a **strict coal-before-ore invariant** (see below).
-4. **Return leg** (bank closed), in order:
-   1. loose coal/ore in inventory → deposit on the belt (one belt click deposits both);
-   2. else the coal bag still holds coal (and a slot is free) → empty the bag into the inventory;
-   3. else the dispenser has ≥ 1 bar ready (and a slot is free) → **collect bars — strictly before any bank trip**, so leftover coal never diverts you to the bank while bars are uncollected;
-   4. else the coffer is low and you hold coins → refill the coffer;
-   5. else → go to the bank to restock.
+3. **Bank interface open** → acquire the next material (coal-before-ore; loose-coal-vs-ore from the furnace — see below).
+4. **At the belt** → deposit loose coal, then ore, then empty the coal bag. Never a fill/withdraw here.
+5. **At the bank chest, interface closed** → finish filling the bag if coal is still in hand (the "exited-bank to fill" case), else carry a load to the belt, else open the bank.
+6. **En route** → carry any load to the belt.
+7. **Empty-handed return leg** → collect bars at the dispenser (strictly before any bank trip), then a coffer top-up if low and carrying coins, else go to the bank.
 
-### Strict Coal-Before-Ore Invariant
+### Location Context
 
-The coal bag holds **only** coal, so from an empty inventory the bank sequence is strictly:
-**(1) withdraw coal → (2) fill the coal bag → (3) withdraw the loose coal load → (4) only then
-withdraw the primary ore.** Ore is *unreachable* in `derive()` until the bag is confidently full
-**and** a loose coal load is present — an explicit ordered guard, not a heuristic. If bag
-fullness is unknown/uncertain, it errs coal-first and never highlights ore.
+`atBank` = bank interface open **or** the player within `PROXIMITY_RADIUS` (3 tiles) of the bank
+chest; `atBelt` = within 3 tiles of the conveyor belt. Proximity uses the live tracked
+GameObjects plus fixed BF anchors (bank ≈ 1948,4957; belt ≈ 1940,4965 — the Blast Furnace is a
+single fixed location; anchors taken from ground-truth `actions.log` positions). This context is
+what stops the policy recommending a belt-deposit while you are filling the bag at the bank, and
+vice-versa.
 
-This is possible because coal-bag contents are tracked as an **authoritative count**, not a
-boolean: the count comes primarily from the coal-bag **chat messages** ("The coal bag is
-empty/now full", "…contains N pieces of coal"), with Fill/Empty menu clicks + inventory
-inference as a secondary source. A count that is merely "unknown" (`-1`, e.g. just after a
-relog) is treated as *not full* → coal-first. The earlier boolean toggle could falsely read
-"bag already full" and skip straight to ore; the count fixes that.
+### Coal-Before-Ore and the Furnace-Derived Loose-Coal Decision
+
+The coal bag holds **only** coal, so it is always filled first (coal-before-ore is preserved).
+Whether a trip then needs a **loose coal load** or goes straight to ore is derived from the
+**furnace** coal/ore varbits and the ratio, **not** from inventory coal: after the bag is full,
+if even the bag's coal would leave the furnace short for its ore, it is a "coal trip" (withdraw a
+loose load); otherwise it is an "ore trip" (straight to ore). Crucially the ore step does **not**
+require `invCoal > 0` — filling the bag consumes the inventory coal, and the earlier
+`coalBagFull && invCoal > 0` gate could therefore never unlock ore (it stuck on coal forever).
+
+Coal-bag contents are tracked as an **authoritative count**, not a boolean: primarily from the
+coal-bag **chat messages** ("The coal bag is empty/now full", "…contains N pieces of coal"), with
+Fill/Empty menu clicks + inventory inference secondary. An "unknown" count (`-1`, e.g. after a
+relog) is treated as *not full* → coal-first.
 
 ### Bar Types & Coal Ratios
 
@@ -99,6 +112,8 @@ standard value here).
 | `objectColor` | Orange | Color for conveyor belt / dispenser / bank chest highlights |
 | `showWorldArrow` | On | Show the bobbing arrow above the current world-object target |
 | `worldArrowColor` | Cyan | Color of the bobbing world arrow |
+| `predictNextTarget` | On | Pre-aim: ghost marker where the next bank withdrawal will appear |
+| `predictColor` | Purple | Color of the predicted-position (pre-aim) marker |
 | `showPanel` | On | Toggle the stats overlay |
 | `cofferEnabled` | On | Enable coffer balance tracking and highlights |
 | `cofferLowMinutes` | 20 min | Highlight coffer as LOW when time remaining is below this |
@@ -173,7 +188,29 @@ vertical bob is `sin(client.getGameCycle() / 15) * 8`. The arrow shape (a vertic
 downward arrowhead, black outline then colored fill) is an independent re-implementation of
 quest-helper's `DirectionArrow.drawWorldArrow` technique
 ([github.com/Zoinkwiz/quest-helper](https://github.com/Zoinkwiz/quest-helper), BSD-2-Clause),
-cited as the approach reference.
+cited as the approach reference. Because objects in the small BF region are always loaded, the
+arrow shows the whole time you walk toward a target (not only when adjacent) — the object
+"pre-aim" case.
+
+## Predictive Pre-Aim (Bank Items)
+
+When the bank is **closed** but the next action will be a bank withdrawal (you are walking to the
+bank), a ghost marker shows **where that item will appear** once the bank opens, so you can
+pre-move the mouse. It reuses the interface's own geometry and previously-seen data rather than
+hardcoded grid math:
+
+- **Geometry from the Widget API**: while the bank is open, each relevant item's canvas rectangle
+  is read from the live bank item container's child widgets — `Widget.getBounds()` of
+  `client.getWidget(12, 12)` (the `Bankmain.ITEMS` container, group 12 child 12) — never computed
+  from column/cell math.
+- **Persisted "seen" layout**: each seen position (item id → slot + canvas bounds) is saved to
+  `~/.runelite/blast-furnace-helper/bank-layout.json` and reloaded on the next session, so pre-aim
+  works from the start of a run and refreshes the moment the bank is reopened.
+- **Which item**: computed by asking the policy what it would withdraw *if the bank were open now*
+  (`snapshot.toBuilder().bankOpen(true)` → `derive()`), only while heading to the bank.
+- **Precedence**: live (bank open — the real highlight) > persisted/seen position > none (no
+  marker if that item was never seen — no wild guessing). Item id is the key, so a remembered
+  position survives bank reordering as long as the slot was seen at least once.
 
 ## Structural Reference
 
@@ -183,6 +220,13 @@ highlights, ALWAYS_ON_TOP for widget highlights), hub registration structure, an
 drawing technique (`DirectionArrow.drawWorldArrow`, re-implemented independently).
 
 ## Changelog
+
+### v0.2.4
+- **Location-aware policy (biggest fix)**: the guidance was station-blind and conflated a coal-bag *fill* with a belt *deposit* (both consume inventory coal). Added location context to the snapshot — `bankOpen` plus belt/bank proximity (`atBank`, `atBelt`) — and gated the loop on it: fills/withdrawals only at the bank, deposits/empties only at the belt. Ground-truth `actions.log` anchors (bank ≈ 1948,4957; belt ≈ 1940,4965) + live GameObject proximity, radius 3.
+- **Coal→ore transition unstuck**: the loose-coal-vs-ore decision now comes from the **furnace** coal/ore varbits + ratio, not inventory coal. The ore step no longer requires `invCoal > 0` (filling the bag zeroes inventory coal, which had made ore unreachable — the policy looped on coal forever). Verified against the reported row (bagFull, coal=0, fcoal=56 → ore).
+- **Coal-bag fill highlight persists after leaving the bank**: `FILL_COAL_BAG` is recommended while at/near the bank (not only while the interface is open) and rendered in whichever inventory is visible — the **bankside** inventory (group 15 child 3) when the bank is open, the **normal** inventory (group 149 child 0) when closed.
+- **Predictive pre-aim**: ghost marker showing where the next bank withdrawal will appear before the bank opens, using Widget-API geometry from the bank item container (group 12 child 12) and a persisted seen layout at `~/.runelite/blast-furnace-helper/bank-layout.json` (precedence live > seen > none). Config `predictNextTarget` (default on) + `predictColor`.
+- Verified with a trace harness (14 cases) against the routine's real click order — deposit/fill and coal/ore recommendations match at each step.
 
 ### v0.2.3
 - **Highlights stay prevalent over open interfaces**: the bank/inventory item overlay moved to `OverlayLayer.ABOVE_WIDGETS` so bank-item highlights draw on top of the open bank UI instead of being occluded; the status panel is now `ABOVE_WIDGETS` too, so it stays visible with the bank open. No highlight is suppressed merely because a UI is open. (Scene/world highlights + the world arrow remain `ABOVE_SCENE`, naturally behind a full-screen bank, and reappear the instant it closes.)
@@ -224,7 +268,7 @@ To load locally without Plugin Hub:
 
 1. Build: `./gradlew build` (requires JDK 11)
 2. In RuneLite launcher, add `--dev` flag or use **RuneLite → Plugin Hub → Load from file**
-3. Point to `build/libs/runelite-blast-furnace-helper-0.2.3.jar`
+3. Point to `build/libs/runelite-blast-furnace-helper-0.2.4.jar`
 
 Alternatively, place the jar in `~/.runelite/plugins/` (external plugin folder if configured).
 

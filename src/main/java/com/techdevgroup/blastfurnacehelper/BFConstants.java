@@ -15,6 +15,18 @@ public final class BFConstants {
     // BF minigame region (RuneLite BlastFurnacePlugin)
     public static final int BF_REGION = 7757;
 
+    // Standing-position anchors for the two work stations, from the user's actions.log ground
+    // truth: bank withdrawals/fills at ~(1948,4957); belt deposits at ~(1942,4967)/(1939,4963).
+    // The Blast Furnace is a single fixed location, so these world coords are constant. Used with
+    // PROXIMITY_RADIUS to tell "at the bank" from "at the belt" so the policy stops confusing a
+    // belt-deposit with a coal-bag fill. Live GameObject positions are also used when available.
+    public static final int BANK_ANCHOR_X = 1948;
+    public static final int BANK_ANCHOR_Y = 4957;
+    public static final int BELT_ANCHOR_X = 1940;
+    public static final int BELT_ANCHOR_Y = 4965;
+    /** Chebyshev tile radius around an anchor that counts as "at" that station. */
+    public static final int PROXIMITY_RADIUS = 3;
+
     // Game object IDs — RuneLite gameval/ObjectID.java (BSD-2-Clause).
     /** Clickable conveyor belt ("Put-ore-on"): BLAST_FURNACE_CONVEYER_BELT_CLICKABLE = 9100. */
     public static final int CONVEYOR_BELT  = 9100;

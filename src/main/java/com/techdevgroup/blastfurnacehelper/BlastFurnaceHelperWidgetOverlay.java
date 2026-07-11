@@ -1,8 +1,10 @@
 package com.techdevgroup.blastfurnacehelper;
 
+import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
+import java.awt.Stroke;
 import java.util.HashSet;
 import java.util.Set;
 import javax.inject.Inject;
@@ -64,9 +66,36 @@ public class BlastFurnaceHelperWidgetOverlay extends Overlay
         else
         {
             renderInventoryHighlights(graphics, g);
+            // Pre-aim: ghost marker where the next bank withdrawal will appear once the bank opens.
+            renderBankPrediction(graphics);
         }
 
         return null;
+    }
+
+    /**
+     * Draws a ghost marker at the last-seen canvas position of the predicted next bank
+     * withdrawal, so the player can pre-move the mouse before the bank interface appears.
+     * Position source precedence: live (bank open — handled by the normal highlight) &gt;
+     * persisted/seen layout (here) &gt; none (no marker when the item was never seen).
+     */
+    private void renderBankPrediction(Graphics2D graphics)
+    {
+        int predicted = plugin.getPredictedBankItemId();
+        if (predicted < 0) return;
+
+        java.awt.Rectangle r = plugin.getBankLayout().bounds(predicted);
+        if (r == null) return; // never seen → no guess
+
+        Color c = config.predictColor();
+        graphics.setColor(new Color(c.getRed(), c.getGreen(), c.getBlue(), 45));
+        graphics.fill(r);
+        Stroke old = graphics.getStroke();
+        graphics.setStroke(new BasicStroke(2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
+            1f, new float[] { 4f, 4f }, 0f));
+        graphics.setColor(c);
+        graphics.draw(r);
+        graphics.setStroke(old);
     }
 
     /** Highlights the single next bank withdrawal, plus coins when the coffer is low/critical. */

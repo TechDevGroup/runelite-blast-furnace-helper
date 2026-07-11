@@ -53,6 +53,19 @@ public interface BlastFurnaceHelperConfig extends Config
         position = 41)
     default Color worldArrowColor() { return new Color(0, 200, 255, 255); }
 
+    @ConfigItem(keyName = "predictNextTarget", name = "Predict Next Target",
+        description = "Pre-aim: show a ghost marker where the next bank withdrawal will appear "
+            + "before the bank opens (from the last-seen bank layout), and keep the world arrow "
+            + "on objects while you walk toward them. Indicator only, never clicks.",
+        position = 42)
+    default boolean predictNextTarget() { return true; }
+
+    @Alpha
+    @ConfigItem(keyName = "predictColor", name = "Prediction Marker Color",
+        description = "Color of the predicted-position (pre-aim) ghost marker.",
+        position = 43)
+    default Color predictColor() { return new Color(200, 0, 255, 180); }
+
     @ConfigItem(keyName = "showPanel", name = "Show Trip Computer",
         description = "Show the trip computer overlay with session stats.",
         position = 5)

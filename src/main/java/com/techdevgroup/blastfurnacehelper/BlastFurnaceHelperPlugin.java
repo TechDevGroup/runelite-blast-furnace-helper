@@ -1,6 +1,7 @@
 package com.techdevgroup.blastfurnacehelper;
 
 import com.google.inject.Provides;
+import java.awt.Rectangle;
 import java.time.Instant;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -16,6 +17,7 @@ import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.MenuAction;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.widgets.Widget;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameObjectDespawned;
 import net.runelite.api.events.GameObjectSpawned;
@@ -102,6 +104,11 @@ public class BlastFurnaceHelperPlugin extends Plugin
     private final BFActionLogger actionLogger = new BFActionLogger();
     private BFAction lastLoggedAction = null;
 
+    // Predictive "pre-aim": remembers last-seen bank item positions, persisted across sessions.
+    @Getter private final BankLayoutCache bankLayout = new BankLayoutCache();
+    private BFStateSnapshot lastSnapshot = null;
+    private boolean bankLayoutDirty = false;
+
     @Override
     protected void startUp()
     {
@@ -109,6 +116,8 @@ public class BlastFurnaceHelperPlugin extends Plugin
         overlayManager.add(widgetOverlay);
         overlayManager.add(panel);
         keyManager.registerKeyListener(resetHotkeyListener);
+        // Load the previously-seen bank layout so pre-aim works from the start of the run.
+        bankLayout.load(BFActionLogger.DIR.resolve("bank-layout.json"));
         resetStats();
     }
 
@@ -119,6 +128,11 @@ public class BlastFurnaceHelperPlugin extends Plugin
         overlayManager.remove(widgetOverlay);
         overlayManager.remove(panel);
         keyManager.unregisterKeyListener(resetHotkeyListener);
+        if (bankLayoutDirty)
+        {
+            bankLayout.save(BFActionLogger.DIR.resolve("bank-layout.json"));
+            bankLayoutDirty = false;
+        }
         clearTransientState();
     }
 
@@ -214,7 +228,19 @@ public class BlastFurnaceHelperPlugin extends Plugin
         }
 
         // Poll bank open/closed state.
-        bankOpen = client.getWidget(BFConstants.BANK_GROUP_ID, 0) != null;
+        boolean nowBankOpen = client.getWidget(BFConstants.BANK_GROUP_ID, 0) != null;
+        if (nowBankOpen)
+        {
+            // Refresh the seen bank layout from the live interface geometry.
+            updateBankLayout();
+        }
+        else if (bankOpen && bankLayoutDirty)
+        {
+            // Bank just closed → persist the freshly-seen layout for next time.
+            bankLayout.save(BFActionLogger.DIR.resolve("bank-layout.json"));
+            bankLayoutDirty = false;
+        }
+        bankOpen = nowBankOpen;
 
         detectBarType();
 
@@ -231,6 +257,7 @@ public class BlastFurnaceHelperPlugin extends Plugin
 
         // Derive the next action from a fresh state snapshot (pure function of state).
         BFStateSnapshot snap = buildSnapshot(eff);
+        lastSnapshot = snap;
         guidance = BFPolicy.derive(snap);
 
         // Log every change of the recommended action, so the trajectory captures the full
@@ -275,6 +302,8 @@ public class BlastFurnaceHelperPlugin extends Plugin
             .freeSlots(freeSlots)
             .coalBagHasCoal(coalBagHasCoal)
             .coalBagFull(coalBagFull)
+            .atBank(isAtBank())
+            .atBelt(isAtBelt())
             .furnaceCoal(furnaceCoal)
             .furnaceOre(furnaceOre)
             .furnaceBars(furnaceBars)
@@ -447,9 +476,11 @@ public class BlastFurnaceHelperPlugin extends Plugin
             }
         }
         return String.format(
-            "state[coal=%d ore=%d bars=%d free=%d bagCount=%d bagFull=%b fcoal=%d fbars=%d disp=%d coffer=%d region=%d pos=%s]",
+            "state[coal=%d ore=%d bars=%d free=%d bagCount=%d bagFull=%b atBank=%b atBelt=%b "
+                + "fcoal=%d fore=%d fbars=%d disp=%d coffer=%d region=%d pos=%s]",
             s.getInvCoal(), s.getInvOre(), s.getInvBars(), s.getFreeSlots(),
-            coalBagCount, s.isCoalBagFull(), s.getFurnaceCoal(), s.getFurnaceBars(),
+            coalBagCount, s.isCoalBagFull(), s.isAtBank(), s.isAtBelt(),
+            s.getFurnaceCoal(), s.getFurnaceOre(), s.getFurnaceBars(),
             s.getDispenserState(), cofferBalance, region, pos);
     }
 
@@ -581,5 +612,120 @@ public class BlastFurnaceHelperPlugin extends Plugin
         ItemContainer inv = client.getItemContainer(InventoryID.INVENTORY);
         if (inv == null) return false;
         return countItem(inv.getItems(), BFConstants.ITEM_COINS) > 0;
+    }
+
+    // ── Location context ────────────────────────────────────────────────────────
+
+    /** True when the bank interface is open or the player is standing at the bank chest. */
+    public boolean isAtBank()
+    {
+        if (bankOpen) return true;
+        if (nearObject(bankChest)) return true;
+        return nearWorldPoint(BFConstants.BANK_ANCHOR_X, BFConstants.BANK_ANCHOR_Y);
+    }
+
+    /** True when the player is standing at the conveyor belt. */
+    public boolean isAtBelt()
+    {
+        if (nearObject(conveyorBelt)) return true;
+        return nearWorldPoint(BFConstants.BELT_ANCHOR_X, BFConstants.BELT_ANCHOR_Y);
+    }
+
+    private WorldPoint playerLocation()
+    {
+        return client.getLocalPlayer() != null ? client.getLocalPlayer().getWorldLocation() : null;
+    }
+
+    private boolean nearWorldPoint(int x, int y)
+    {
+        WorldPoint p = playerLocation();
+        if (p == null) return false;
+        return Math.abs(p.getX() - x) <= BFConstants.PROXIMITY_RADIUS
+            && Math.abs(p.getY() - y) <= BFConstants.PROXIMITY_RADIUS;
+    }
+
+    private boolean nearObject(GameObject obj)
+    {
+        if (obj == null) return false;
+        WorldPoint p = playerLocation();
+        WorldPoint o = obj.getWorldLocation();
+        if (p == null || o == null || p.getPlane() != o.getPlane()) return false;
+        return Math.abs(p.getX() - o.getX()) <= BFConstants.PROXIMITY_RADIUS
+            && Math.abs(p.getY() - o.getY()) <= BFConstants.PROXIMITY_RADIUS;
+    }
+
+    // ── Predictive pre-aim ──────────────────────────────────────────────────────
+
+    /**
+     * Records the on-screen bounds of relevant bank items from the live interface geometry
+     * (Widget child bounds of the bank item container, group 12 child 12), keyed by item id.
+     */
+    private void updateBankLayout()
+    {
+        Widget container = client.getWidget(BFConstants.BANK_GROUP_ID,
+            BFConstants.BANK_ITEM_CONTAINER_CHILD);
+        if (container == null || container.isHidden())
+        {
+            return;
+        }
+        Widget[] children = container.getDynamicChildren();
+        if (children == null)
+        {
+            return;
+        }
+        for (int i = 0; i < children.length; i++)
+        {
+            Widget child = children[i];
+            if (child == null || child.isHidden())
+            {
+                continue;
+            }
+            int id = child.getItemId();
+            if (isRelevantBankItem(id))
+            {
+                Rectangle b = child.getBounds();
+                if (b != null && b.width > 0 && b.height > 0)
+                {
+                    bankLayout.record(id, i, b);
+                    bankLayoutDirty = true;
+                }
+            }
+        }
+    }
+
+    /**
+     * The predicted next bank-withdrawal item id when the bank is CLOSED and the player is
+     * heading to the bank — computed by asking the policy what it would withdraw if the bank were
+     * open right now. Returns -1 when the bank is open (the real highlight covers it), when the
+     * feature is off, or when no withdrawal is pending. The caller pairs this with
+     * {@link #getBankLayout()} to place a ghost marker at the last-seen position.
+     */
+    public int getPredictedBankItemId()
+    {
+        if (!config.predictNextTarget() || bankOpen || lastSnapshot == null)
+        {
+            return -1;
+        }
+        if (guidance.getAction() != BFAction.GO_TO_BANK)
+        {
+            return -1;
+        }
+        BFStateSnapshot asIfOpen = lastSnapshot.toBuilder().bankOpen(true).build();
+        return BFPolicy.derive(asIfOpen).getBankItemId();
+    }
+
+    private boolean isRelevantBankItem(int id)
+    {
+        if (id == BFConstants.ITEM_COAL || id == BFConstants.ITEM_COINS
+            || id == BFConstants.ITEM_IRON_ORE || id == BFConstants.ITEM_MITHRIL_ORE
+            || id == BFConstants.ITEM_ADAMANTITE_ORE || id == BFConstants.ITEM_RUNITE_ORE)
+        {
+            return true;
+        }
+        for (int r : BFConstants.RUN_ENERGY_ITEMS)
+        {
+            if (r == id) return true;
+        }
+        return false;
     }
 }
