@@ -172,21 +172,23 @@ final class BFPolicy {
     }
 
     /**
-     * Furnace-derived loose-coal decision. Even after the coal bag's full capacity is deposited,
-     * would the furnace still be short of coal for the ore it holds PLUS a full ore load we are
-     * about to add? If so this is a "coal trip" (bring a loose coal load); otherwise the bag
-     * alone covers the ore and we go straight to it (a "1-coal + 1-ore trip").
+     * Furnace-derived loose-coal decision, driven by the furnace COAL varbit against a fixed
+     * sufficiency threshold: even after the coal bag's full capacity is added, would the furnace
+     * have less coal than a full ore load needs? If so it is a "coal trip" (bring a loose coal
+     * load); otherwise the bag alone covers the next ore load and we go straight to ore (a
+     * "1-coal + 1-ore trip").
      *
-     * <p>Using a full {@link BFConstants#ORE_LOAD} (not +1) is what makes a small residual coal
-     * amount count as effectively empty: a fresh/near-empty furnace can never cover a whole ore
-     * load from the bag alone, so it correctly triggers a coal trip. This matches the user's
-     * observed furnace-coal-driven trip split (verbatim actions.log): at adamantite (ratio 3,
-     * ORE_LOAD 27, bag 27) the threshold is {@code fcoal < ratio*ORE_LOAD - bag = 3*27 - 27 = 54}
-     * — so {@code fcoal≈2} → 2-coal trip, {@code fcoal≈56} → 1-coal+1-ore trip. Pure function of
-     * the furnace varbits and ratio; no inventory heuristics.
+     * <p>Matches the user's observed furnace-coal-driven split (verbatim actions.log): at
+     * adamantite (ratio 3, ORE_LOAD 27, bag 27) the switch is {@code fcoal < ratio*ORE_LOAD - bag
+     * = 81 - 27 = 54} — so {@code fcoal≈2} → 2-coal trip, {@code fcoal≈56} → 1-coal+1-ore trip.
+     *
+     * <p>The threshold is deliberately INDEPENDENT of {@code furnaceOre}. An earlier version added
+     * {@code furnaceOre} to the requirement, which — whenever the furnace held ore mid-smelt —
+     * inflated the coal demand so much that the decision was <em>always</em> "coal trip", so the
+     * ore step (and its ore highlight) was never reached. The observed behaviour is coal-level
+     * driven, so a fixed threshold both matches the data and never stalls the ore phase.
      */
     private static boolean furnaceNeedsLooseCoal(BFStateSnapshot s, int ratio) {
-        return s.getFurnaceCoal() + BFConstants.COAL_BAG_CAPACITY
-            < ratio * (s.getFurnaceOre() + BFConstants.ORE_LOAD);
+        return s.getFurnaceCoal() + BFConstants.COAL_BAG_CAPACITY < ratio * BFConstants.ORE_LOAD;
     }
 }

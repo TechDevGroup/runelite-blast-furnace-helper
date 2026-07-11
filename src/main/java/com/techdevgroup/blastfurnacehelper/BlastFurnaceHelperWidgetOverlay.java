@@ -8,6 +8,7 @@ import java.awt.Stroke;
 import java.util.HashSet;
 import java.util.Set;
 import javax.inject.Inject;
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.ui.overlay.Overlay;
@@ -22,6 +23,7 @@ import net.runelite.client.ui.overlay.OverlayPriority;
  * run-energy restorative the player carries when run energy is low (to withdraw if the bank is
  * open, otherwise to drink). Overlay-only.
  */
+@Slf4j
 public class BlastFurnaceHelperWidgetOverlay extends Overlay
 {
     private final Client client;
@@ -60,7 +62,12 @@ public class BlastFurnaceHelperWidgetOverlay extends Overlay
             {
                 Widget bankside = client.getWidget(BFConstants.BANKSIDE_GROUP_ID,
                     BFConstants.BANKSIDE_ITEMS_CHILD);
-                highlightCoalBag(graphics, bankside, g.getInvItemId());
+                highlightCoalBag(graphics, bankside);
+            }
+            // Prestage the (runtime-discovered) close button once withdrawals are done.
+            if (plugin.shouldPrestageClose())
+            {
+                renderMarker(graphics, plugin.getCloseButtonBounds());
             }
         }
         else
@@ -79,12 +86,28 @@ public class BlastFurnaceHelperWidgetOverlay extends Overlay
      * Position source precedence: live (bank open — handled by the normal highlight) &gt;
      * persisted/seen layout (here) &gt; none (no marker when the item was never seen).
      */
+    private int lastPredictLog = Integer.MIN_VALUE;
+
     private void renderBankPrediction(Graphics2D graphics)
     {
         int predicted = plugin.getPredictedBankItemId();
-        if (predicted < 0) return;
+        java.awt.Rectangle r = predicted < 0 ? null : plugin.getBankLayout().bounds(predicted);
+        int emitted = r != null ? 1 : 0;
+        // Deduped debug: how many predicted markers we emit, and why zero (no item vs never-seen).
+        int key = predicted * 2 + emitted;
+        if (key != lastPredictLog)
+        {
+            lastPredictLog = key;
+            log.debug("BF bank prediction: predictedItem={} markersEmitted={} ({})",
+                predicted, emitted,
+                predicted < 0 ? "no pending withdrawal" : (r == null ? "position never seen" : "ok"));
+        }
+        renderMarker(graphics, r);
+    }
 
-        java.awt.Rectangle r = plugin.getBankLayout().bounds(predicted);
+    /** Dashed ghost pre-aim marker at the given canvas bounds (no-op when null / never seen). */
+    private void renderMarker(Graphics2D graphics, java.awt.Rectangle r)
+    {
         if (r == null) return; // never seen → no guess
 
         Color c = config.predictColor();
@@ -148,37 +171,62 @@ public class BlastFurnaceHelperWidgetOverlay extends Overlay
         int invItem = g.getInvItemId();
         // Run energy: highlight the single best restorative present in the inventory to drink.
         int energyItem = lowEnergy() ? preferredRunEnergyItem(children) : -1;
+        boolean coalWanted = invItem >= 0;
+        boolean coalFound = false;
 
         for (Widget child : children)
         {
             if (child == null || child.isHidden()) continue;
             int id = child.getItemId();
 
-            // Coal bag appears as 12019 (empty) or 12020 (full) depending on contents.
-            if (invItem >= 0 && (id == invItem || id == BFConstants.ITEM_COAL_BAG_FULL))
+            if (coalWanted && BFConstants.isCoalBag(id))
             {
                 paint(graphics, child, config.objectColor());
+                coalFound = true;
             }
             else if (energyItem >= 0 && id == energyItem)
             {
                 paint(graphics, child, config.bankItemColor());
             }
         }
+        logCoalBag(coalWanted, coalFound, "inventory");
     }
 
-    /** Highlights the coal bag (12019/12020) within an arbitrary item container widget. */
-    private void highlightCoalBag(Graphics2D graphics, Widget container, int itemId)
+    /** Highlights the coal bag within an arbitrary item container widget. */
+    private void highlightCoalBag(Graphics2D graphics, Widget container)
     {
-        if (container == null || container.isHidden()) return;
+        if (container == null || container.isHidden())
+        {
+            logCoalBag(true, false, "bankside(no container)");
+            return;
+        }
         Widget[] children = container.getDynamicChildren();
         if (children == null) return;
+        boolean found = false;
         for (Widget child : children)
         {
             if (child == null || child.isHidden()) continue;
-            int id = child.getItemId();
-            if (id == itemId || id == BFConstants.ITEM_COAL_BAG_FULL)
+            if (BFConstants.isCoalBag(child.getItemId()))
             {
                 paint(graphics, child, config.objectColor());
+                found = true;
+            }
+        }
+        logCoalBag(true, found, "bankside");
+    }
+
+    // Deduped debug logging for whether the coal-bag slot is located (-1 not wanted / 0 miss / 1 hit).
+    private int coalBagLogState = -2;
+
+    private void logCoalBag(boolean wanted, boolean found, String where)
+    {
+        int state = !wanted ? -1 : (found ? 1 : 0);
+        if (state != coalBagLogState)
+        {
+            coalBagLogState = state;
+            if (wanted)
+            {
+                log.debug("BF coal-bag highlight: {} in {}", found ? "FOUND" : "NOT FOUND", where);
             }
         }
     }

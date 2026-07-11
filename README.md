@@ -214,6 +214,19 @@ hardcoded grid math:
   marker if that item was never seen — no wild guessing). Item id is the key, so a remembered
   position survives bank reordering as long as the slot was seen at least once.
 
+### Close-Button Prestage (runtime-discovered)
+
+When withdrawals are done and the next step is to leave for the belt (`bankOpen && guidance ==
+GO_TO_BELT`), the plugin prestages the bank **close button** so you can pre-move the mouse. The
+close button has **no hardcoded widget id** — it is discovered at runtime by walking the bank
+interface (group 12) widget tree for the child whose menu op contains **"Close"** (case-insensitive
+`Widget.getActions()`), then taking that child's live canvas bounds. Those bounds are cached under a
+reserved key (`-1`) in `bank-layout.json` with the same **live > persisted-seen > none** precedence,
+so the marker survives across sessions. If no "Close" child is found (a different interface layout),
+nothing is cached and no marker is shown — never a guess. The discovered widget id + bounds are
+logged once (`log.debug`, "discovered bank close button, widgetId=…") so the concrete id can be
+recorded.
+
 ## Standing-Tile Hotspots
 
 For the current world-object target, the plugin marks the **tile to stand on** before interacting
@@ -234,6 +247,12 @@ highlights, ALWAYS_ON_TOP for widget highlights), hub registration structure, an
 drawing technique (`DirectionArrow.drawWorldArrow`, re-implemented independently).
 
 ## Changelog
+
+### v0.2.6
+- **Fixed: adamantite ore never highlighted (bug 3).** Two causes: (a) the coal-bag id constant was **12020, which is actually `GEM_BAG`** — it is now the real coal bag ids (`12019` / open `24480`), and Fill/Empty detection also falls back to the menu target text, so the coal-bag *full* state is tracked and the policy can advance past the coal phase; (b) `furnaceNeedsLooseCoal` added `furnaceOre` to the coal requirement, which — whenever the furnace held ore mid-smelt — made the decision *always* a coal trip, so `WITHDRAW_ORE` was never reached. The threshold is now furnace-coal-only (`furnaceCoal + bag < ratio × ORE_LOAD`), still matching the observed 2/56 split but never stalling. Both coal (453) and primary ore (adamantite 449) now highlight in their phases.
+- **Fixed: coal-bag empty/fill highlight not showing (bug 2).** Same wrong `12020` id — the highlight now matches any coal-bag id (`isCoalBag`). Debug log added for whether the coal-bag slot is located.
+- **Fixed: predictive bank ghost markers not showing (bug 1).** While walking to the bank the player is usually carrying finished bars, so the 1-step prediction returned `DEPOSIT_BARS` (no bank item). It now looks past that (`invBars = 0`) to surface the coal/ore that will be withdrawn next. Debug log added for markers emitted per frame (distinguishes "no pending withdrawal" from "position never seen").
+- **Bank close-button prestage (runtime-discovered, no hardcoded id)**: while the bank is open, walks the bank interface (group 12) widget tree for the child whose menu op contains "Close" and takes its live canvas bounds; cached under a reserved key (`-1`) in `bank-layout.json` (live > persisted-seen > none). Shown when `bankOpen && guidance == GO_TO_BELT`. If no "Close" child exists, no marker — never a guess. The discovered widget id is logged once.
 
 ### v0.2.5
 - **Coal-sufficiency threshold fixed** (data-backed): `furnaceNeedsLooseCoal` now compares against a full ore load — `furnaceCoal + bagCapacity < ratio × (furnaceOre + ORE_LOAD)` — instead of `+ 1`. A small residual coal amount no longer reads as "enough". For adamantite (ratio 3, ORE_LOAD 27, bag 27) the switch point is `fcoal < 54`, matching the user's observed furnace-coal-driven split: `fcoal≈2` → 2-coal trip, `fcoal≈56` → 1-coal+1-ore trip.
@@ -288,7 +307,7 @@ To load locally without Plugin Hub:
 
 1. Build: `./gradlew build` (requires JDK 11)
 2. In RuneLite launcher, add `--dev` flag or use **RuneLite → Plugin Hub → Load from file**
-3. Point to `build/libs/runelite-blast-furnace-helper-0.2.5.jar`
+3. Point to `build/libs/runelite-blast-furnace-helper-0.2.6.jar`
 
 Alternatively, place the jar in `~/.runelite/plugins/` (external plugin folder if configured).
 

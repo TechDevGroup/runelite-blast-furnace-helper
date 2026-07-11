@@ -113,6 +113,12 @@ public class BlastFurnaceHelperPlugin extends Plugin
     @Getter private final HotspotStore hotspots = new HotspotStore();
     private boolean hotspotsDirty = false;
 
+    // Runtime-discovered bank close button (no hardcoded id). Reserved cache key; live bounds this
+    // tick (null when the bank is closed), falling back to the persisted-seen bounds.
+    static final int CLOSE_BUTTON_KEY = -1;
+    private Rectangle liveCloseBounds = null;
+    private boolean closeButtonLogged = false;
+
     @Override
     protected void startUp()
     {
@@ -241,14 +247,19 @@ public class BlastFurnaceHelperPlugin extends Plugin
         boolean nowBankOpen = client.getWidget(BFConstants.BANK_GROUP_ID, 0) != null;
         if (nowBankOpen)
         {
-            // Refresh the seen bank layout from the live interface geometry.
+            // Refresh the seen bank layout + discover the close button from the live interface.
             updateBankLayout();
+            scanCloseButton();
         }
-        else if (bankOpen && bankLayoutDirty)
+        else
         {
-            // Bank just closed → persist the freshly-seen layout for next time.
-            bankLayout.save(BFActionLogger.DIR.resolve("bank-layout.json"));
-            bankLayoutDirty = false;
+            liveCloseBounds = null;
+            if (bankOpen && bankLayoutDirty)
+            {
+                // Bank just closed → persist the freshly-seen layout for next time.
+                bankLayout.save(BFActionLogger.DIR.resolve("bank-layout.json"));
+                bankLayoutDirty = false;
+            }
         }
         bankOpen = nowBankOpen;
 
@@ -371,10 +382,14 @@ public class BlastFurnaceHelperPlugin extends Plugin
         String option = event.getMenuOption();
         if (option == null) return;
 
+        // Coal-bag Fill/Empty detection. Robust to the coal-bag item id (12019 / open 24480) and,
+        // as a fallback, the menu target text — event.getItemId() is not reliable for widget ops.
         int itemId = event.getItemId();
-        if (itemId == BFConstants.ITEM_COAL_BAG || itemId == BFConstants.ITEM_COAL_BAG_FULL)
+        String target = event.getMenuTarget() != null
+            ? Text.removeTags(event.getMenuTarget()).toLowerCase() : "";
+        boolean coalBagClick = BFConstants.isCoalBag(itemId) || target.contains("coal bag");
+        if (coalBagClick)
         {
-            // Secondary inference from the click (chat messages are authoritative and override).
             if ("Fill".equalsIgnoreCase(option))
             {
                 // The bag absorbs coal from the inventory, up to capacity.
@@ -382,10 +397,12 @@ public class BlastFurnaceHelperPlugin extends Plugin
                 int invCoal = inv != null ? countItem(inv.getItems(), BFConstants.ITEM_COAL) : 0;
                 int prev = Math.max(coalBagCount, 0);
                 coalBagCount = Math.min(prev + invCoal, BFConstants.COAL_BAG_CAPACITY);
+                log.debug("BF coal-bag Fill: invCoal={} -> coalBagCount={}", invCoal, coalBagCount);
             }
             else if ("Empty".equalsIgnoreCase(option))
             {
                 coalBagCount = 0;
+                log.debug("BF coal-bag Empty -> coalBagCount=0");
             }
         }
 
@@ -435,12 +452,11 @@ public class BlastFurnaceHelperPlugin extends Plugin
         }
     }
 
-    // Coal-bag chat messages (authoritative). Examples:
-    //   "The coal bag contains twenty-seven pieces of coal." / "...contains 27 pieces of coal."
-    //   "The coal bag is empty." / "Your coal bag is now empty."
-    //   "The coal bag is now full." / "Your coal bag is already full."
+    // Coal-bag chat messages. The number can come before OR after "coal bag":
+    //   "The coal bag contains 27 pieces of coal." / "You put 27 pieces of coal into your coal bag."
+    //   "The coal bag is empty." / "The coal bag is now full."
     private static final Pattern COAL_BAG_COUNT =
-        Pattern.compile("coal bag[^0-9]*?(\\d+) pieces of coal", Pattern.CASE_INSENSITIVE);
+        Pattern.compile("(\\d+)\\s+pieces? of coal", Pattern.CASE_INSENSITIVE);
 
     @Subscribe
     public void onChatMessage(ChatMessage event)
@@ -475,6 +491,7 @@ public class BlastFurnaceHelperPlugin extends Plugin
             {
                 int n = Integer.parseInt(m.group(1));
                 coalBagCount = Math.max(0, Math.min(n, BFConstants.COAL_BAG_CAPACITY));
+                log.debug("BF coal-bag chat '{}' -> coalBagCount={}", msg, coalBagCount);
             }
             catch (NumberFormatException ignored)
             {
@@ -741,6 +758,106 @@ public class BlastFurnaceHelperPlugin extends Plugin
     }
 
     /**
+     * Discovers the bank's close button at RUNTIME (no hardcoded id) by walking the bank interface
+     * (group 12) widget tree for the child whose menu op contains "Close", and caches its live
+     * canvas bounds under {@link #CLOSE_BUTTON_KEY} so the prestage marker survives to future
+     * sessions. If no such child is found (a different interface layout), nothing is cached and no
+     * marker is shown — never a guess.
+     */
+    private void scanCloseButton()
+    {
+        Widget close = null;
+        for (int child = 0; child <= 3 && close == null; child++)
+        {
+            close = findCloseButton(client.getWidget(BFConstants.BANK_GROUP_ID, child));
+        }
+        if (close == null)
+        {
+            return;
+        }
+        Rectangle b = close.getBounds();
+        if (b == null || b.width <= 0 || b.height <= 0)
+        {
+            return;
+        }
+        liveCloseBounds = b;
+        bankLayout.record(CLOSE_BUTTON_KEY, 0, b);
+        bankLayoutDirty = true;
+        if (!closeButtonLogged)
+        {
+            // Report the discovered widget id + bounds once, so it can be recorded.
+            log.debug("Blast Furnace: discovered bank close button, widgetId={} bounds={}",
+                close.getId(), b);
+            closeButtonLogged = true;
+        }
+    }
+
+    /** Recursively finds the first widget in the tree whose menu op contains "Close". */
+    private Widget findCloseButton(Widget w)
+    {
+        if (w == null)
+        {
+            return null;
+        }
+        String[] actions = w.getActions();
+        if (actions != null)
+        {
+            for (String action : actions)
+            {
+                if (action != null && action.toLowerCase().contains("close"))
+                {
+                    return w;
+                }
+            }
+        }
+        Widget r;
+        if ((r = findCloseInAll(w.getStaticChildren())) != null) return r;
+        if ((r = findCloseInAll(w.getDynamicChildren())) != null) return r;
+        if ((r = findCloseInAll(w.getNestedChildren())) != null) return r;
+        return null;
+    }
+
+    private Widget findCloseInAll(Widget[] children)
+    {
+        if (children == null)
+        {
+            return null;
+        }
+        for (Widget c : children)
+        {
+            Widget r = findCloseButton(c);
+            if (r != null)
+            {
+                return r;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Canvas bounds to prestage the bank close button, or null. Precedence: the live discovered
+     * bounds this tick > the persisted-seen bounds > none.
+     */
+    public Rectangle getCloseButtonBounds()
+    {
+        if (liveCloseBounds != null)
+        {
+            return liveCloseBounds;
+        }
+        return bankLayout.bounds(CLOSE_BUTTON_KEY);
+    }
+
+    /**
+     * True when the bank is open and the withdrawals are done (the policy's next step is to leave
+     * for the belt) — the moment to prestage the close button.
+     */
+    public boolean shouldPrestageClose()
+    {
+        return config.predictNextTarget() && bankOpen
+            && guidance.getAction() == BFAction.GO_TO_BELT;
+    }
+
+    /**
      * The predicted next bank-withdrawal item id when the bank is CLOSED and the player is
      * heading to the bank — computed by asking the policy what it would withdraw if the bank were
      * open right now. Returns -1 when the bank is open (the real highlight covers it), when the
@@ -757,7 +874,11 @@ public class BlastFurnaceHelperPlugin extends Plugin
         {
             return -1;
         }
-        BFStateSnapshot asIfOpen = lastSnapshot.toBuilder().bankOpen(true).build();
+        // Predict the first WITHDRAWAL. While walking to the bank the player is usually carrying
+        // finished bars, so deriving "as if the bank were open" would just return DEPOSIT_BARS
+        // (no bank item). Look past that by assuming the bars are deposited (invBars = 0) so we
+        // surface the coal/ore the player will withdraw next.
+        BFStateSnapshot asIfOpen = lastSnapshot.toBuilder().bankOpen(true).invBars(0).build();
         return BFPolicy.derive(asIfOpen).getBankItemId();
     }
 

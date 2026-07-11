@@ -93,8 +93,16 @@ public final class BFConstants {
 
     // Item IDs (RuneLite ItemID / OSRS Wiki)
     public static final int ITEM_COAL            = 453;
+    // Coal bag ids — RuneLite gameval/ItemID.java: COAL_BAG = 12019, COAL_BAG_OPEN = 24480.
+    // NOTE: 12020 is GEM_BAG, not a coal-bag variant — do not use it here.
     public static final int ITEM_COAL_BAG        = 12019;
-    public static final int ITEM_COAL_BAG_FULL   = 12020;
+    public static final int ITEM_COAL_BAG_OPEN   = 24480;
+
+    /** True for any coal-bag item id (closed or open). */
+    public static boolean isCoalBag(int id) {
+        return id == ITEM_COAL_BAG || id == ITEM_COAL_BAG_OPEN;
+    }
+
     public static final int ITEM_IRON_ORE        = 440;
     public static final int ITEM_MITHRIL_ORE     = 447;
     public static final int ITEM_ADAMANTITE_ORE  = 449;

@@ -29,8 +29,9 @@ class BankLayoutCache
     /** item id -> {slot, x, y, w, h}. */
     private final Map<Integer, int[]> layout = new ConcurrentHashMap<>();
 
+    // Keys are item ids (positive); a reserved negative key stores the discovered close button.
     private static final Pattern ENTRY = Pattern.compile(
-        "\"(\\d+)\":\\{\"slot\":(-?\\d+),\"x\":(-?\\d+),\"y\":(-?\\d+),\"w\":(-?\\d+),\"h\":(-?\\d+)\\}");
+        "\"(-?\\d+)\":\\{\"slot\":(-?\\d+),\"x\":(-?\\d+),\"y\":(-?\\d+),\"w\":(-?\\d+),\"h\":(-?\\d+)\\}");
 
     /** Records/updates the last-seen slot + canvas bounds for an item id. */
     void record(int itemId, int slot, Rectangle bounds)
