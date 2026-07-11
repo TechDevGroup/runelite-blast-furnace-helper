@@ -6,11 +6,15 @@ A RuneLite plugin that provides a trip computer, click-target highlights, and co
 
 - **State-derived guidance**: Every tick the plugin recomputes the single correct next action purely from observed game state (furnace coal/ore/bar varbits, dispenser state, inventory, coal-bag fullness, coffer balance). It is a pure function of state — no positional step counter — so it self-corrects if you arrive mid-cycle or act out of sequence.
 - **Click-target highlights**: Highlights the one object the guidance points at (conveyor belt, bar dispenser, or bank chest).
-- **Bank item highlights**: When the bank is open, highlights the single next item to withdraw — coal (bag fill first) **before** ore — plus coins when the coffer is low, and stamina potions when run energy is low.
+- **Persistent world arrow**: A bobbing arrow floats above the current world-object target and stays there until that step's state is satisfied, so you never assume a step is finished while the arrow is still overhead.
+- **Bank item highlights**: When the bank is open, highlights the single next item to withdraw — coal (bag fill first) **before** ore — plus coins when the coffer is low, and a run-energy restorative when run energy is low.
+- **Opportunistic bar collection**: On the return leg to the bank, highlights the dispenser to collect bars as soon as at least one bar is ready and you have a free slot — never waits for a full 27-bar dispenser.
 - **Coal-bag emptying**: At the belt, highlights the coal bag in your inventory when it still holds coal and you have a free slot, so the bagged coal drops in to be dumped.
+- **Run-energy highlight**: When run energy is low, highlights the best restorative you carry (stamina potion → stamina mix → super energy → super energy mix → energy potion, highest dose first) — to withdraw if the bank is open, otherwise to drink from the inventory.
 - **Trip computer overlay**: One consolidated panel showing next action, runtime, bar type, per-hour rates (bars/hr, ore/hr), coffer balance, estimated time remaining, and standing coffer cost — all auto-stacking so nothing overlaps.
 - **Coffer tracking**: Reads the coffer balance from a game varbit every tick and highlights the coffer and/or bank coins when the balance is low or critical.
 - **Reset stats**: Configurable hotkey, right-click **Reset stats** on the panel, and automatic reset when the bar type changes.
+- **Action logger (debug)**: Optionally records each click and every change of the recommended action to a rotating log file, pairing what the policy recommended against what you actually did — for validating and tuning the guidance policy.
 
 ## Coffer (GP Renewal) Tracking
 
@@ -45,9 +49,9 @@ and coffer balance. Priority order:
 
 1. **Coffer critical** — withdraw coins (bank) or deposit them into the coffer (holding coins); the furnace halts when the coffer empties.
 2. **Bars in inventory** → deposit at bank.
-3. **Bars in the dispenser** → collect (or wait while still smelting).
-4. **Bank open** → acquire the next material: **coal first** (fill bag, then loose coal), and only once coal is satisfied, the primary ore. One target at a time.
-5. **At the belt** → empty the coal bag (if it holds coal and a slot is free), then deposit coal, then deposit ore.
+3. **Bank open** → acquire the next material: **coal first** (fill bag, then loose coal), and only once coal is satisfied, the primary ore. One target at a time.
+4. **At the belt** → empty the coal bag (if it holds coal and a slot is free), then deposit coal, then deposit ore — dump the carried load first.
+5. **Return leg** → opportunistically collect bars while passing the dispenser, as soon as ≥ 1 bar is ready (per-type bar varbit) and a slot is free. Never waits for a full 27-bar dispenser; reached only once the inventory has nothing left to deposit.
 6. Otherwise → return to the bank to restock.
 
 Whether to bring coal or ore is decided from furnace state: coal is needed while
@@ -75,9 +79,12 @@ standard value here).
 | Key | Default | Description |
 |---|---|---|
 | `barType` | AUTO | Override bar type; AUTO detects from inventory ore |
-| `staminaThreshold` | 50% | Highlight stamina potions when run energy is below this |
+| `highlightRunEnergy` | On | Highlight the best run-energy restorative you carry when run energy is low |
+| `staminaThreshold` | 50% | Highlight a run-energy restorative when run energy is below this |
 | `bankItemColor` | Green | Color for bank item highlights |
 | `objectColor` | Orange | Color for conveyor belt / dispenser / bank chest highlights |
+| `showWorldArrow` | On | Show the bobbing arrow above the current world-object target |
+| `worldArrowColor` | Cyan | Color of the bobbing world arrow |
 | `showPanel` | On | Toggle the stats overlay |
 | `cofferEnabled` | On | Enable coffer balance tracking and highlights |
 | `cofferLowMinutes` | 20 min | Highlight coffer as LOW when time remaining is below this |
@@ -85,6 +92,40 @@ standard value here).
 | `cofferLowColor` | Yellow | Color for coffer LOW state highlights and panel text |
 | `cofferCriticalColor` | Red | Color for coffer CRITICAL/EMPTY highlights and panel alert |
 | `resetHotkey` | (unset) | Hotkey to zero the trip computer and restart the timer |
+| `logActions` | On | Log clicks + recommendation changes for policy tuning (see below) |
+
+## Run-Energy Restoratives
+
+When run energy drops below the threshold, the plugin highlights the single best restorative you
+actually carry. **There is no distinct "extended stamina potion" item in the game** — this is the
+full run-energy restore family. Preference order (stamina is the Blast Furnace standard, but
+whatever you have is highlighted), highest dose first within each family:
+
+1. Stamina potion (4/3/2/1): 12625 / 12627 / 12629 / 12631
+2. Stamina mix (2/1): 12633 / 12635
+3. Super energy (4/3/2/1): 3016 / 3018 / 3020 / 3022
+4. Super energy mix (2/1): 11481 / 11483
+5. Energy potion (4/3/2/1): 3008 / 3010 / 3012 / 3014
+
+If the bank is open it highlights the item to **withdraw**; otherwise it highlights the item in
+your inventory to **drink**. All ids cache-verified against RuneLite `gameval/ItemID.java`.
+
+## Action Logger (Debug)
+
+With `logActions` enabled (default on while the policy is being tuned), the plugin appends to a
+rotating log at `~/.runelite/blast-furnace-helper/actions.log` (rotates to `actions.log.1..3` at
+~1 MB). Two line types are written while in the Blast Furnace region:
+
+- `event=CLICK` — on every menu click: tick, timestamp, the option/target/id/itemId/menuAction/type,
+  a snapshot of derived state, and the policy's `recommended=` action at that moment.
+- `event=REC_CHANGE` — whenever the recommended action changes (even without a click), capturing
+  the full ordered sequence.
+
+State snapshot fields: `coal ore bars free` (inventory), `bag` (coal-bag fullness), `fcoal`
+(furnace coal), `fbars` (bars ready in dispenser), `disp` (dispenser state varbit 936), `coffer`
+balance, and player `region`/`pos`. Pairing `recommended=` against the actual click makes
+policy/behaviour divergences obvious for tuning. This records only your own client-side actions —
+no automation, no network.
 
 ## Source Citations
 
@@ -97,15 +138,43 @@ factual constants only:
 - **Bar dispenser** (9092 base + state variants 9093–9096 = `BLAST_FURNACE_DISPENSER` / `BLAST_FURNACE_ORE_DISPENSER_*`): `gameval/ObjectID.java`. The plugin tracks the whole family so the highlight follows the dispenser through its states. (The old value 9104 was wrong — it is `BLAST_FURNACE_CONVEYER_COGS2`, a cog.)
 - **Coffer objects** (29328/29329/29330 = `BLAST_FURNACE_AUTOMATA_COFFER_*`): `gameval/ObjectID.java`; cross-checked OSRS Wiki "Coffer (Blast Furnace)"
 - **Furnace varbits**: coal-stored 949 (`BLAST_FURNACE_COAL`), iron-ore 951, mithril-ore 952, adamantite-ore 953, runite-ore 954; bars iron 942 / steel 943 / mithril 944 / adamantite 945 / runite 946; dispenser state 936 (`BLAST_FURNACE_BARS_HOT`); coffer balance 5357 (`BLAST_FURNACE_COFFER`) — all from `gameval/VarbitID.java`, the same varbits RuneLite core's `BlastFurnaceOverlay`/`BlastFurnaceCofferOverlay` read.
-- **Item IDs**: RuneLite `ItemID` constants and OSRS Wiki
+- **Item IDs** (ores/bars/coal/coal bag/coins): RuneLite `ItemID` constants and OSRS Wiki
+- **Run-energy item IDs** (stamina 12625/12627/12629/12631, stamina mix 12633/12635, super energy 3016/3018/3020/3022, super energy mix 11481/11483, energy potion 3008/3010/3012/3014): cache-verified against `gameval/ItemID.java`. (The pre-0.2.2 energy-potion constants 3004/3006 were wrong — 3004 is a snapdragon vial, 3006 a firework — and have been corrected.)
 - **Coal ratios** (0/1/2/3/4 for iron/steel/mithril/adamantite/runite) and **coffer drain** (72,000 gp/hr, 1,200 gp/min, 12 gp/tick; max 20M gp; foreman 2,500/10 min): [OSRS Wiki — Blast Furnace](https://oldschool.runescape.wiki/w/Blast_Furnace), retrieved 2026-07-11
 - **Coal bag capacity** (27): OSRS Wiki
 
+## Persistent World Arrow
+
+A bobbing arrow floats above the current world-object target (belt 9100, dispenser 9092–9096,
+coffer 29328–29330, or the bank chest) and is drawn every frame while the state-derived policy
+still points at that object. Because the target and its completion come from the policy, the
+arrow disappears only when the step's state is satisfied — over the belt until coal/ore is
+deposited, over the dispenser until bars are collected, over the coffer until it is refilled.
+Inventory-item targets (coal bag, coal/ore, potions) keep their widget/inventory highlight and
+get no world arrow.
+
+Rendering: `OverlayLayer.ABOVE_SCENE`; the canvas anchor above the object tile is computed with
+`net.runelite.api.Perspective.localToCanvas(client, object.getLocalLocation(), plane, 200)`; the
+vertical bob is `sin(client.getGameCycle() / 15) * 8`. The arrow shape (a vertical stalk plus a
+downward arrowhead, black outline then colored fill) is an independent re-implementation of
+quest-helper's `DirectionArrow.drawWorldArrow` technique
+([github.com/Zoinkwiz/quest-helper](https://github.com/Zoinkwiz/quest-helper), BSD-2-Clause),
+cited as the approach reference.
+
 ## Structural Reference
 
-quest-helper (github.com/Zoinkwiz/quest-helper, BSD-2) served as the pattern reference for overlay layering conventions (ABOVE_SCENE for world highlights, ALWAYS_ON_TOP for widget highlights) and hub registration structure.
+quest-helper ([github.com/Zoinkwiz/quest-helper](https://github.com/Zoinkwiz/quest-helper), BSD-2)
+served as the pattern reference for overlay layering conventions (ABOVE_SCENE for world
+highlights, ALWAYS_ON_TOP for widget highlights), hub registration structure, and the world-arrow
+drawing technique (`DirectionArrow.drawWorldArrow`, re-implemented independently).
 
 ## Changelog
+
+### v0.2.2
+- **Opportunistic bar collection**: the policy now collects bars on the return leg — as soon as ≥ 1 bar is ready (per-type bar varbit) and a free slot exists — instead of interrupting a deposit or waiting for a full 27-bar dispenser. The collect check moved below the belt-deposit block and gained a free-slot gate.
+- **Persistent world arrow**: a bobbing arrow (own re-implementation of quest-helper's `DirectionArrow.drawWorldArrow`, cited) floats above the current world-object target until the step's state is satisfied. `Perspective.localToCanvas` for the anchor; `sin(gameCycle/15)*8` bob. Config: `showWorldArrow` (default on), `worldArrowColor`.
+- **Run-energy family highlight**: broadened from base stamina to the full run-energy restore set (stamina/stamina mix/super energy/super energy mix/energy potion). Highlights the single best item you carry — to withdraw if the bank is open, else to drink. Config: `highlightRunEnergy` (default on). Corrected the pre-0.2.2 energy-potion ids (3004/3006 were a snapdragon vial / firework) to the real family (3008/3010/3012/3014). There is no "extended stamina" item.
+- **Action logger**: with `logActions` (default on), appends `CLICK` and `REC_CHANGE` lines to `~/.runelite/blast-furnace-helper/actions.log` (rotating), pairing the policy's recommended action against the player's actual clicks and derived state for tuning.
 
 ### v0.2.1
 - **State-derived guidance (new architecture)**: replaced the positional trip-state step machine with `BFPolicy` — a pure, idempotent function from an observed-state snapshot to the single correct next action. Reads furnace coal (varbit 949), this type's ore/bars, dispenser state (varbit 936), inventory, coal-bag fullness, and coffer balance. Self-corrects mid-cycle.
@@ -134,7 +203,7 @@ To load locally without Plugin Hub:
 
 1. Build: `./gradlew build` (requires JDK 11)
 2. In RuneLite launcher, add `--dev` flag or use **RuneLite → Plugin Hub → Load from file**
-3. Point to `build/libs/runelite-blast-furnace-helper-0.2.1.jar`
+3. Point to `build/libs/runelite-blast-furnace-helper-0.2.2.jar`
 
 Alternatively, place the jar in `~/.runelite/plugins/` (external plugin folder if configured).
 

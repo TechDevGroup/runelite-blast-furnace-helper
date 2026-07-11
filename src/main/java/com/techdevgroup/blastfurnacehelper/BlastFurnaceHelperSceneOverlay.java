@@ -7,7 +7,9 @@ import java.awt.Shape;
 import javax.inject.Inject;
 import net.runelite.api.Client;
 import net.runelite.api.GameObject;
+import net.runelite.api.Perspective;
 import net.runelite.api.Point;
+import net.runelite.api.coords.LocalPoint;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
@@ -15,11 +17,17 @@ import net.runelite.client.ui.overlay.OverlayUtil;
 
 /**
  * Highlights the single world object the state-derived policy points at (conveyor belt,
- * bar dispenser, or bank chest), plus the coffer when it is low/critical or the player is
- * holding coins to top it up. Overlay-only — never automates input.
+ * bar dispenser, or bank chest), draws a persistent bobbing arrow above it, and highlights the
+ * coffer when it is low/critical or the player is holding coins to top it up. Overlay-only —
+ * never automates input.
  */
 public class BlastFurnaceHelperSceneOverlay extends Overlay
 {
+    // Height (local units) above the object tile where the arrow tip floats, and the bob params.
+    private static final int ARROW_HEIGHT = 200;
+    private static final double BOB_PERIOD = 15.0;
+    private static final double BOB_AMPLITUDE = 8.0;
+
     private final Client client;
     private final BlastFurnaceHelperPlugin plugin;
     private final BlastFurnaceHelperConfig config;
@@ -42,13 +50,20 @@ public class BlastFurnaceHelperSceneOverlay extends Overlay
     {
         if (!plugin.isInBlastFurnace()) return null;
 
-        // Policy object highlight (skip while the bank is open — the widget overlay leads there).
+        // Policy object highlight + persistent bobbing arrow (skip while the bank is open — the
+        // widget overlay leads there). The arrow persists over the object every frame while the
+        // policy still points at it, and vanishes only when the action's state is satisfied and
+        // the derived guidance moves on — so the player never assumes a step is done early.
         if (!plugin.isBankOpen())
         {
             GameObject target = resolveTargetObject(plugin.getGuidance().objectTarget());
             if (target != null)
             {
                 highlight(graphics, target, config.objectColor(), 20);
+                if (config.showWorldArrow())
+                {
+                    renderWorldArrow(graphics, target);
+                }
             }
         }
 
@@ -59,6 +74,24 @@ public class BlastFurnaceHelperSceneOverlay extends Overlay
         }
 
         return null;
+    }
+
+    /**
+     * Draws a bobbing arrow floating above the target object. The canvas anchor is obtained via
+     * {@link Perspective#localToCanvas(Client, LocalPoint, int, int)} at a fixed height above the
+     * object's tile; the vertical bob is a sine of the game cycle so it animates every frame.
+     */
+    private void renderWorldArrow(Graphics2D graphics, GameObject target)
+    {
+        LocalPoint lp = target.getLocalLocation();
+        if (lp == null) return;
+
+        // Canvas point ~200 game units above the object's tile.
+        Point anchor = Perspective.localToCanvas(client, lp, client.getPlane(), ARROW_HEIGHT);
+        if (anchor == null) return;
+
+        int bob = (int) (Math.sin(client.getGameCycle() / BOB_PERIOD) * BOB_AMPLITUDE);
+        WorldArrow.draw(graphics, config.worldArrowColor(), anchor.getX(), anchor.getY() + bob);
     }
 
     private void renderCofferHighlight(Graphics2D graphics)

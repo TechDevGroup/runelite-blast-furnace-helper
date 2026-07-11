@@ -92,16 +92,41 @@ public final class BFConstants {
     public static final int ITEM_MITHRIL_BAR     = 2359;
     public static final int ITEM_ADAMANTITE_BAR  = 2361;
     public static final int ITEM_RUNITE_BAR      = 2363;
-    public static final int ITEM_STAMINA_4       = 12625;
-    public static final int ITEM_STAMINA_3       = 12627;
-    public static final int ITEM_STAMINA_2       = 12629;
-    public static final int ITEM_STAMINA_1       = 12631;
-    public static final int ITEM_ENERGY_4        = 3010;
-    public static final int ITEM_ENERGY_3        = 3008;
-    public static final int ITEM_ENERGY_2        = 3006;
-    public static final int ITEM_ENERGY_1        = 3004;
     /** Coins — used for coffer refill bank-withdrawal highlight. */
     public static final int ITEM_COINS           = 995;
+
+    // ── Run-energy restoratives ────────────────────────────────────────────────
+    // All ids cache-verified against RuneLite gameval/ItemID.java (BSD-2-Clause).
+    // There is NO distinct "extended stamina" item in the game; this is the full run-energy
+    // restore family. RUN_ENERGY_ITEMS lists them in highlight-preference order: Stamina
+    // potion > Stamina mix > Super energy > Super energy mix > Energy potion, highest dose
+    // first within each family (stamina is the Blast Furnace standard, but we highlight
+    // whatever the player actually carries).
+    public static final int ITEM_STAMINA_4       = 12625; // _4DOSESTAMINA
+    public static final int ITEM_STAMINA_3       = 12627; // _3DOSESTAMINA
+    public static final int ITEM_STAMINA_2       = 12629; // _2DOSESTAMINA
+    public static final int ITEM_STAMINA_1       = 12631; // _1DOSESTAMINA
+    public static final int ITEM_STAMINA_MIX_2   = 12633; // BRUTAL_2DOSESTAMINA (stamina mix)
+    public static final int ITEM_STAMINA_MIX_1   = 12635; // BRUTAL_1DOSESTAMINA (stamina mix)
+    public static final int ITEM_SUPER_ENERGY_4  = 3016;  // _4DOSE2ENERGY
+    public static final int ITEM_SUPER_ENERGY_3  = 3018;  // _3DOSE2ENERGY
+    public static final int ITEM_SUPER_ENERGY_2  = 3020;  // _2DOSE2ENERGY
+    public static final int ITEM_SUPER_ENERGY_1  = 3022;  // _1DOSE2ENERGY
+    public static final int ITEM_SUPER_ENERGY_MIX_2 = 11481; // BRUTAL_2DOSE2ENERGY
+    public static final int ITEM_SUPER_ENERGY_MIX_1 = 11483; // BRUTAL_1DOSE2ENERGY
+    public static final int ITEM_ENERGY_4        = 3008;  // _4DOSE1ENERGY
+    public static final int ITEM_ENERGY_3        = 3010;  // _3DOSE1ENERGY
+    public static final int ITEM_ENERGY_2        = 3012;  // _2DOSE1ENERGY
+    public static final int ITEM_ENERGY_1        = 3014;  // _1DOSE1ENERGY
+
+    /** Run-energy restoratives in highlight-preference order (best first). */
+    public static final int[] RUN_ENERGY_ITEMS = {
+        ITEM_STAMINA_4, ITEM_STAMINA_3, ITEM_STAMINA_2, ITEM_STAMINA_1,
+        ITEM_STAMINA_MIX_2, ITEM_STAMINA_MIX_1,
+        ITEM_SUPER_ENERGY_4, ITEM_SUPER_ENERGY_3, ITEM_SUPER_ENERGY_2, ITEM_SUPER_ENERGY_1,
+        ITEM_SUPER_ENERGY_MIX_2, ITEM_SUPER_ENERGY_MIX_1,
+        ITEM_ENERGY_4, ITEM_ENERGY_3, ITEM_ENERGY_2, ITEM_ENERGY_1,
+    };
 
     // Coal bag capacity (OSRS Wiki)
     public static final int COAL_BAG_CAPACITY = 27;

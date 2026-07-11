@@ -16,9 +16,16 @@ public interface BlastFurnaceHelperConfig extends Config
         position = 1)
     default BarTypeConfig barType() { return BarTypeConfig.AUTO; }
 
-    @ConfigItem(keyName = "staminaThreshold", name = "Stamina Threshold (%)",
-        description = "Highlight stamina potions when run energy is below this value.",
+    @ConfigItem(keyName = "highlightRunEnergy", name = "Highlight Run-Energy Item",
+        description = "When run energy is low, highlight the best run-energy restorative you carry "
+            + "(stamina/super energy/energy potions and their mixes) — to withdraw if the bank is "
+            + "open, otherwise to drink from the inventory.",
         position = 2)
+    default boolean highlightRunEnergy() { return true; }
+
+    @ConfigItem(keyName = "staminaThreshold", name = "Run Energy Threshold (%)",
+        description = "Highlight a run-energy restorative when run energy is below this value.",
+        position = 3)
     @Range(min = 0, max = 100)
     default int staminaThreshold() { return 50; }
 
@@ -33,6 +40,18 @@ public interface BlastFurnaceHelperConfig extends Config
         description = "Color for highlighting conveyor belt, bar dispenser, and bank chest.",
         position = 4)
     default Color objectColor() { return new Color(255, 165, 0, 200); }
+
+    @ConfigItem(keyName = "showWorldArrow", name = "Show World Arrow",
+        description = "Show a bobbing arrow above the current world-object target (belt, dispenser, "
+            + "coffer, bank chest). Persists until that step's state is satisfied.",
+        position = 40)
+    default boolean showWorldArrow() { return true; }
+
+    @Alpha
+    @ConfigItem(keyName = "worldArrowColor", name = "World Arrow Color",
+        description = "Color of the bobbing world-object arrow.",
+        position = 41)
+    default Color worldArrowColor() { return new Color(0, 200, 255, 255); }
 
     @ConfigItem(keyName = "showPanel", name = "Show Trip Computer",
         description = "Show the trip computer overlay with session stats.",
@@ -74,4 +93,11 @@ public interface BlastFurnaceHelperConfig extends Config
             + "(Stats also auto-reset when the bar type changes; or right-click the panel → Reset stats.)",
         position = 11)
     default Keybind resetHotkey() { return Keybind.NOT_SET; }
+
+    @ConfigItem(keyName = "logActions", name = "Log Actions (debug)",
+        description = "Record each Blast Furnace click and every change of the recommended action "
+            + "to ~/.runelite/blast-furnace-helper/actions.log, pairing what the policy recommended "
+            + "against what you actually did. Used to validate and tune the guidance policy.",
+        position = 12)
+    default boolean logActions() { return true; }
 }

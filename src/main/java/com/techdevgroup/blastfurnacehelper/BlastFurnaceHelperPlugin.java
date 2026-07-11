@@ -11,6 +11,7 @@ import net.runelite.api.GameObject;
 import net.runelite.api.InventoryID;
 import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
+import net.runelite.api.MenuAction;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.GameObjectDespawned;
 import net.runelite.api.events.GameObjectSpawned;
@@ -28,6 +29,7 @@ import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.ui.overlay.OverlayMenuEntry;
 import net.runelite.client.util.HotkeyListener;
+import net.runelite.client.util.Text;
 
 @Slf4j
 @PluginDescriptor(
@@ -85,6 +87,10 @@ public class BlastFurnaceHelperPlugin extends Plugin
 
     private Item[] prevInventory = null;
     private BarType lastEffectiveBarType = null;
+
+    // Action logging (ground-truth capture for policy tuning).
+    private final BFActionLogger actionLogger = new BFActionLogger();
+    private BFAction lastLoggedAction = null;
 
     @Override
     protected void startUp()
@@ -213,7 +219,19 @@ public class BlastFurnaceHelperPlugin extends Plugin
         }
 
         // Derive the next action from a fresh state snapshot (pure function of state).
-        guidance = BFPolicy.derive(buildSnapshot(eff));
+        BFStateSnapshot snap = buildSnapshot(eff);
+        guidance = BFPolicy.derive(snap);
+
+        // Log every change of the recommended action, so the trajectory captures the full
+        // ordered sequence even without a click. Lightweight: only on transition.
+        if (config.logActions() && guidance.getAction() != lastLoggedAction)
+        {
+            actionLogger.append(String.format(
+                "tick=%d ts=%s event=REC_CHANGE recommended=%s prev=%s | %s",
+                client.getTickCount(), Instant.now(), guidance.getAction().name(),
+                lastLoggedAction != null ? lastLoggedAction.name() : "none", stateString(snap)));
+            lastLoggedAction = guidance.getAction();
+        }
     }
 
     /** Gathers observed game state into an immutable snapshot for the policy. */
@@ -309,6 +327,60 @@ public class BlastFurnaceHelperPlugin extends Plugin
                 coalBagFull = false;
             }
         }
+
+        // Ground-truth capture: pair what the player actually clicked against what the policy
+        // recommended at that same moment. The snapshot is rebuilt here so it reflects state at
+        // click time (coal-bag state above is already applied).
+        if (config.logActions())
+        {
+            logClick(event);
+        }
+    }
+
+    private void logClick(MenuOptionClicked event)
+    {
+        BFStateSnapshot snap = buildSnapshot(getEffectiveBarType());
+        BFGuidance rec = BFPolicy.derive(snap);
+        MenuAction ma = event.getMenuAction();
+        String target = event.getMenuTarget() != null ? Text.removeTags(event.getMenuTarget()) : "";
+        actionLogger.append(String.format(
+            "tick=%d ts=%s event=CLICK option=\"%s\" target=\"%s\" id=%d itemId=%d menuAction=%s type=%s "
+                + "| %s | recommended=%s",
+            client.getTickCount(), Instant.now(),
+            event.getMenuOption() != null ? event.getMenuOption() : "",
+            target, event.getId(), event.getItemId(),
+            ma != null ? ma.name() : "?", targetType(ma),
+            stateString(snap), rec.getAction().name()));
+    }
+
+    private static String targetType(MenuAction ma)
+    {
+        if (ma == null) return "UNKNOWN";
+        String n = ma.name();
+        if (n.contains("GAME_OBJECT")) return "OBJECT";
+        if (n.contains("NPC")) return "NPC";
+        if (n.contains("ITEM") || n.contains("WIDGET") || n.startsWith("CC_")) return "ITEM/WIDGET";
+        return "OTHER";
+    }
+
+    private String stateString(BFStateSnapshot s)
+    {
+        String pos = "?";
+        int region = -1;
+        if (client.getLocalPlayer() != null)
+        {
+            WorldPoint p = client.getLocalPlayer().getWorldLocation();
+            if (p != null)
+            {
+                pos = p.getX() + "," + p.getY() + "," + p.getPlane();
+                region = p.getRegionID();
+            }
+        }
+        return String.format(
+            "state[coal=%d ore=%d bars=%d free=%d bag=%s fcoal=%d fbars=%d disp=%d coffer=%d region=%d pos=%s]",
+            s.getInvCoal(), s.getInvOre(), s.getInvBars(), s.getFreeSlots(),
+            s.isCoalBagHasCoal() ? "full" : "empty", s.getFurnaceCoal(), s.getFurnaceBars(),
+            s.getDispenserState(), cofferBalance, region, pos);
     }
 
     @Subscribe

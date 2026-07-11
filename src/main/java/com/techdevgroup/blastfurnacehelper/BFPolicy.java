@@ -13,10 +13,12 @@ package com.techdevgroup.blastfurnacehelper;
  * <ol>
  *   <li>Coffer critical: get / deposit coins (the furnace stops when the coffer empties).</li>
  *   <li>Finished bars in inventory: bank them.</li>
- *   <li>Bars waiting in the dispenser: collect them.</li>
  *   <li>Bank open: acquire the next material — coal (bag first, then loose) BEFORE ore.</li>
  *   <li>At the belt: empty the coal bag (if it holds coal and a slot is free), then deposit
- *       coal, then deposit ore.</li>
+ *       coal, then deposit ore — dump the carried load first.</li>
+ *   <li>Return leg: collect bars OPPORTUNISTICALLY while passing the dispenser — whenever at
+ *       least one bar is ready and a free inventory slot exists. Never wait for a full 27-bar
+ *       dispenser.</li>
  *   <li>Otherwise: return to the bank to restock.</li>
  * </ol>
  */
@@ -49,15 +51,7 @@ final class BFPolicy {
             return BFGuidance.of(BFAction.GO_TO_BANK);
         }
 
-        // 3. Bars waiting in the dispenser → collect (state 2 hot / 3 cooled), else still smelting.
-        if (s.getFurnaceBars() > 0) {
-            if (s.getDispenserState() == 1) {
-                return BFGuidance.of(BFAction.WAIT_SMELT);
-            }
-            return BFGuidance.of(BFAction.COLLECT_BARS);
-        }
-
-        // 4. Bank open → acquire the next material. Coal before ore.
+        // 3. Bank open → acquire the next material. Coal before ore.
         if (s.isBankOpen()) {
             if (needsCoal(s, ratio)) {
                 if (ratio > 0 && !s.isCoalBagHasCoal()) {
@@ -76,7 +70,7 @@ final class BFPolicy {
             return BFGuidance.of(BFAction.GO_TO_BELT);
         }
 
-        // 5. At the belt (bank closed) → dump what we carry.
+        // 4. At the belt (bank closed) → dump the carried load first, before collecting.
         if (s.isCoalBagHasCoal() && s.getFreeSlots() > 0) {
             return BFGuidance.invItem(BFAction.EMPTY_COAL_BAG, BFConstants.ITEM_COAL_BAG);
         }
@@ -87,7 +81,16 @@ final class BFPolicy {
             return BFGuidance.of(BFAction.DEPOSIT_ORE);
         }
 
-        // 6. Nothing in hand — go restock at the bank.
+        // 5. Return leg: opportunistically collect bars while passing the dispenser.
+        //    Fires as soon as >= 1 bar is ready and a slot is free — the player takes whatever
+        //    has smelted on the way back, never waiting for a full 27-bar dispenser. This is
+        //    below the belt-deposit block so a carried load is always dumped first; it is only
+        //    reached once the inventory has nothing left to deposit (i.e. the return leg).
+        if (s.getFurnaceBars() >= 1 && s.getFreeSlots() > 0) {
+            return BFGuidance.of(BFAction.COLLECT_BARS);
+        }
+
+        // 6. Nothing in hand and nothing to collect — go restock at the bank.
         return BFGuidance.of(BFAction.GO_TO_BANK);
     }
 
