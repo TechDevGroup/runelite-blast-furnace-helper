@@ -13,6 +13,11 @@ import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.OverlayUtil;
 
+/**
+ * Highlights the single world object the state-derived policy points at (conveyor belt,
+ * bar dispenser, or bank chest), plus the coffer when it is low/critical or the player is
+ * holding coins to top it up. Overlay-only — never automates input.
+ */
 public class BlastFurnaceHelperSceneOverlay extends Overlay
 {
     private final Client client;
@@ -35,25 +40,19 @@ public class BlastFurnaceHelperSceneOverlay extends Overlay
     @Override
     public Dimension render(Graphics2D graphics)
     {
-        if (!plugin.isInBlastFurnace() || plugin.isBankOpen()) return null;
+        if (!plugin.isInBlastFurnace()) return null;
 
-        // Step-based object highlight (conveyor belt, bar dispenser, bank chest)
-        BFTripState state = plugin.getTripState();
-        GameObject target = resolveTargetObject(state);
-        if (target != null)
+        // Policy object highlight (skip while the bank is open — the widget overlay leads there).
+        if (!plugin.isBankOpen())
         {
-            Shape clickbox = target.getClickbox();
-            if (clickbox != null)
+            GameObject target = resolveTargetObject(plugin.getGuidance().objectTarget());
+            if (target != null)
             {
-                Color c = config.objectColor();
-                Color fill = new Color(c.getRed(), c.getGreen(), c.getBlue(), 20);
-                Point mousePos = client.getMouseCanvasPosition();
-                OverlayUtil.renderHoverableArea(graphics, clickbox, mousePos, fill, c.darker(), c);
+                highlight(graphics, target, config.objectColor(), 20);
             }
         }
 
-        // Coffer highlight: show when coffer is low/critical, or when holding coins to deposit.
-        // Overlay-only — never automates input.
+        // Coffer highlight: low/critical, or holding coins while low/critical → walk to deposit.
         if (config.cofferEnabled())
         {
             renderCofferHighlight(graphics);
@@ -62,10 +61,6 @@ public class BlastFurnaceHelperSceneOverlay extends Overlay
         return null;
     }
 
-    /**
-     * Renders the coffer object highlight when the coffer is low, critical, or the player
-     * is holding coins and should walk to the coffer to top it up.
-     */
     private void renderCofferHighlight(Graphics2D graphics)
     {
         boolean isCritical = plugin.isCofferCritical();
@@ -78,34 +73,27 @@ public class BlastFurnaceHelperSceneOverlay extends Overlay
         if (coffer == null) return;
 
         Color c = isCritical ? config.cofferCriticalColor() : config.cofferLowColor();
-        Shape clickbox = coffer.getClickbox();
-        if (clickbox == null) return;
+        highlight(graphics, coffer, c, 30);
+    }
 
-        Color fill = new Color(c.getRed(), c.getGreen(), c.getBlue(), 30);
+    private void highlight(Graphics2D graphics, GameObject obj, Color c, int fillAlpha)
+    {
+        Shape clickbox = obj.getClickbox();
+        if (clickbox == null) return;
+        Color fill = new Color(c.getRed(), c.getGreen(), c.getBlue(), fillAlpha);
         Point mousePos = client.getMouseCanvasPosition();
         OverlayUtil.renderHoverableArea(graphics, clickbox, mousePos, fill, c.darker(), c);
     }
 
-    private GameObject resolveTargetObject(BFTripState state)
+    private GameObject resolveTargetObject(BFAction.ObjTarget target)
     {
-        switch (state)
+        switch (target)
         {
-            case BELT_DEPOSIT_COAL:
-            case BELT_DEPOSIT_ORE:
-                return plugin.getConveyorBelt();
-
-            case AWAITING_BARS:
-            case COLLECT_BARS:
-                return plugin.getBarDispenser();
-
-            case BANK_WITHDRAW_COAL_1:
-            case BANK_WITHDRAW_ORE:
-            case BANK_DEPOSIT_BARS:
-            case IDLE:
-                return plugin.getBankChest();
-
-            default:
-                return null;
+            case CONVEYOR:   return plugin.getConveyorBelt();
+            case DISPENSER:  return plugin.getBarDispenser();
+            case BANK_CHEST: return plugin.getBankChest();
+            case COFFER:     return plugin.getCofferObject();
+            default:         return null;
         }
     }
 }

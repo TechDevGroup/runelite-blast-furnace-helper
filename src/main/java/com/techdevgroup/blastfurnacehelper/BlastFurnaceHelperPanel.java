@@ -1,16 +1,21 @@
 package com.techdevgroup.blastfurnacehelper;
 
-import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.time.Duration;
 import java.time.Instant;
 import javax.inject.Inject;
+import net.runelite.api.MenuAction;
 import net.runelite.client.ui.overlay.OverlayPanel;
 import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.components.LineComponent;
 import net.runelite.client.ui.overlay.components.TitleComponent;
 
+/**
+ * The single consolidated status panel. All text — next action, runtime, rates, and the
+ * coffer balance/time-left/cost/alert lines — lives here as auto-stacking LineComponents in
+ * one OverlayPanel, so nothing can overlap. Right-click the panel for "Reset stats".
+ */
 public class BlastFurnaceHelperPanel extends OverlayPanel
 {
     private final BlastFurnaceHelperPlugin plugin;
@@ -24,6 +29,10 @@ public class BlastFurnaceHelperPanel extends OverlayPanel
         this.plugin = plugin;
         this.config = config;
         setPosition(OverlayPosition.TOP_LEFT);
+        // Right-click menu entry to zero the trip computer. Handled in the plugin via
+        // OverlayMenuClicked — a UI action, never automated game input.
+        addMenuEntry(MenuAction.RUNELITE_OVERLAY, BlastFurnaceHelperPlugin.RESET_MENU_OPTION,
+            "Blast Furnace Helper");
     }
 
     @Override
@@ -34,6 +43,10 @@ public class BlastFurnaceHelperPanel extends OverlayPanel
         panelComponent.getChildren().clear();
         panelComponent.getChildren().add(
             TitleComponent.builder().text("Blast Furnace Helper").build());
+
+        // Next action — the state-derived guidance, shown in one place.
+        panelComponent.getChildren().add(LineComponent.builder()
+            .left("Next").right(plugin.getGuidance().label()).build());
 
         Duration elapsed = Duration.between(plugin.getSessionStart(), Instant.now());
         long seconds = elapsed.getSeconds();
@@ -51,9 +64,6 @@ public class BlastFurnaceHelperPanel extends OverlayPanel
         String barLabel = bt != null ? bt.getDisplayName() : "Unknown";
         panelComponent.getChildren().add(LineComponent.builder()
             .left("Bar Type").right(barLabel).build());
-
-        panelComponent.getChildren().add(LineComponent.builder()
-            .left("State").right(plugin.getTripState().name()).build());
 
         int coal = plugin.getCoalDeposited();
         int ore = plugin.getOreDeposited();
@@ -77,7 +87,7 @@ public class BlastFurnaceHelperPanel extends OverlayPanel
         }
 
         // Coffer section — balance, time remaining, standing cost line.
-        // Drain rate: 72,000 gp/hr (OSRS Wiki "Blast Furnace", 2026-07-07).
+        // Drain rate: 72,000 gp/hr (OSRS Wiki "Blast Furnace", 2026-07-11).
         if (config.cofferEnabled() && plugin.getCofferBalance() >= 0)
         {
             int cofferBal = plugin.getCofferBalance();

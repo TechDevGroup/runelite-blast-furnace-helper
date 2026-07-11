@@ -5,6 +5,7 @@ import net.runelite.client.config.Alpha;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
+import net.runelite.client.config.Keybind;
 import net.runelite.client.config.Range;
 
 @ConfigGroup("blastfurnacehelper")
@@ -67,4 +68,10 @@ public interface BlastFurnaceHelperConfig extends Config
         description = "Highlight color for the coffer object and panel alert when coffer is critical or empty.",
         position = 10)
     default Color cofferCriticalColor() { return new Color(255, 0, 0, 220); }
+
+    @ConfigItem(keyName = "resetHotkey", name = "Reset Stats Hotkey",
+        description = "Press to zero all trip-computer counters and restart the timer. "
+            + "(Stats also auto-reset when the bar type changes; or right-click the panel → Reset stats.)",
+        position = 11)
+    default Keybind resetHotkey() { return Keybind.NOT_SET; }
 }

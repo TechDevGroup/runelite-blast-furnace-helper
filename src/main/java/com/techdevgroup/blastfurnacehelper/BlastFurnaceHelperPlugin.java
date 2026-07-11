@@ -18,12 +18,16 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.MenuOptionClicked;
-import net.runelite.api.events.VarbitChanged;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.OverlayMenuClicked;
+import net.runelite.client.input.KeyManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.ui.overlay.OverlayMenuEntry;
+import net.runelite.client.util.HotkeyListener;
 
 @Slf4j
 @PluginDescriptor(
@@ -33,18 +37,32 @@ import net.runelite.client.ui.overlay.OverlayManager;
 )
 public class BlastFurnaceHelperPlugin extends Plugin
 {
+    static final String RESET_MENU_OPTION = "Reset stats";
+
     @Inject private Client client;
     @Inject private OverlayManager overlayManager;
     @Inject private BlastFurnaceHelperSceneOverlay sceneOverlay;
     @Inject private BlastFurnaceHelperWidgetOverlay widgetOverlay;
     @Inject private BlastFurnaceHelperPanel panel;
     @Inject private BlastFurnaceHelperConfig config;
+    @Inject private KeyManager keyManager;
+
+    private final HotkeyListener resetHotkeyListener =
+        new HotkeyListener(() -> config.resetHotkey())
+        {
+            @Override
+            public void hotkeyPressed()
+            {
+                resetStats();
+            }
+        };
 
     // State
-    @Getter private BFTripState tripState = BFTripState.IDLE;
     @Getter private boolean bankOpen = false;
     @Getter private boolean coalBagFull = false;
     @Getter private BarType detectedBarType = null;
+    /** The single next action, derived from observed state each tick. */
+    @Getter private BFGuidance guidance = BFGuidance.of(BFAction.IDLE);
 
     // Tracked objects
     @Getter private GameObject conveyorBelt = null;
@@ -61,13 +79,12 @@ public class BlastFurnaceHelperPlugin extends Plugin
 
     /**
      * Coffer balance in GP, read from varbit 5357 (VarbitID.BLAST_FURNACE_COFFER).
-     * Source: github.com/runelite/runelite runelite-api/.../gameval/VarbitID.java (BSD-2-Clause).
-     * -1 = not yet read (before first tick in the BF region).
+     * Source: RuneLite gameval/VarbitID.java (BSD-2-Clause). -1 = not yet read.
      */
     @Getter private int cofferBalance = -1;
 
     private Item[] prevInventory = null;
-    private boolean prevBankOpen = false;
+    private BarType lastEffectiveBarType = null;
 
     @Override
     protected void startUp()
@@ -75,6 +92,7 @@ public class BlastFurnaceHelperPlugin extends Plugin
         overlayManager.add(sceneOverlay);
         overlayManager.add(widgetOverlay);
         overlayManager.add(panel);
+        keyManager.registerKeyListener(resetHotkeyListener);
         resetStats();
     }
 
@@ -84,10 +102,15 @@ public class BlastFurnaceHelperPlugin extends Plugin
         overlayManager.remove(sceneOverlay);
         overlayManager.remove(widgetOverlay);
         overlayManager.remove(panel);
-        tripState = BFTripState.IDLE;
+        keyManager.unregisterKeyListener(resetHotkeyListener);
+        clearTransientState();
+    }
+
+    private void clearTransientState()
+    {
+        guidance = BFGuidance.of(BFAction.IDLE);
         prevInventory = null;
         bankOpen = false;
-        prevBankOpen = false;
         conveyorBelt = null;
         barDispenser = null;
         bankChest = null;
@@ -134,15 +157,27 @@ public class BlastFurnaceHelperPlugin extends Plugin
     {
         if (event.getGameState() != GameState.LOGGED_IN)
         {
-            tripState = BFTripState.IDLE;
-            prevInventory = null;
-            bankOpen = false;
-            prevBankOpen = false;
-            conveyorBelt = null;
-            barDispenser = null;
-            bankChest = null;
-            cofferObject = null;
-            cofferBalance = -1;
+            clearTransientState();
+        }
+    }
+
+    @Subscribe
+    public void onConfigChanged(ConfigChanged event)
+    {
+        // Explicit bar-type override change → reset the trip computer.
+        if ("blastfurnacehelper".equals(event.getGroup()) && "barType".equals(event.getKey()))
+        {
+            resetStats();
+        }
+    }
+
+    @Subscribe
+    public void onOverlayMenuClicked(OverlayMenuClicked event)
+    {
+        OverlayMenuEntry entry = event.getEntry();
+        if (event.getOverlay() == panel && RESET_MENU_OPTION.equals(entry.getOption()))
+        {
+            resetStats();
         }
     }
 
@@ -151,69 +186,68 @@ public class BlastFurnaceHelperPlugin extends Plugin
     {
         if (!isInBlastFurnace())
         {
-            if (tripState != BFTripState.IDLE) tripState = BFTripState.IDLE;
+            guidance = BFGuidance.of(BFAction.IDLE);
             return;
         }
 
-        // Poll coffer balance every tick (varbit 5357 = VarbitID.BLAST_FURNACE_COFFER)
+        // Poll coffer balance (varbit 5357 = VarbitID.BLAST_FURNACE_COFFER).
         if (config.cofferEnabled())
         {
             cofferBalance = client.getVarbitValue(BFConstants.VAR_COFFER);
         }
 
-        // Poll bank open/closed state
-        boolean bankNow = client.getWidget(BFConstants.BANK_GROUP_ID, 0) != null;
-        if (bankNow != prevBankOpen)
-        {
-            if (bankNow)
-            {
-                bankOpen = true;
-                onBankOpened();
-            }
-            else
-            {
-                bankOpen = false;
-                onBankClosed();
-            }
-            prevBankOpen = bankNow;
-        }
+        // Poll bank open/closed state.
+        bankOpen = client.getWidget(BFConstants.BANK_GROUP_ID, 0) != null;
 
         detectBarType();
-        selfCorrectState();
+
+        // Auto-reset the trip computer when the effective bar type changes mid-session.
+        BarType eff = getEffectiveBarType();
+        if (eff != null && lastEffectiveBarType != null && eff != lastEffectiveBarType)
+        {
+            resetStats();
+        }
+        if (eff != null)
+        {
+            lastEffectiveBarType = eff;
+        }
+
+        // Derive the next action from a fresh state snapshot (pure function of state).
+        guidance = BFPolicy.derive(buildSnapshot(eff));
     }
 
-    private void onBankOpened()
+    /** Gathers observed game state into an immutable snapshot for the policy. */
+    private BFStateSnapshot buildSnapshot(BarType bt)
     {
-        switch (tripState)
-        {
-            case IDLE:
-            case BELT_DEPOSIT_COAL:
-                tripState = BFTripState.BANK_WITHDRAW_COAL_1;
-                break;
-            case COLLECT_BARS:
-                tripState = BFTripState.BANK_DEPOSIT_BARS;
-                break;
-            default:
-                break;
-        }
-    }
+        ItemContainer inv = client.getItemContainer(InventoryID.INVENTORY);
+        Item[] items = inv != null ? inv.getItems() : null;
 
-    private void onBankClosed()
-    {
-        switch (tripState)
-        {
-            case BANK_WITHDRAW_COAL_1:
-                tripState = BFTripState.BELT_DEPOSIT_COAL;
-                break;
-            case BANK_WITHDRAW_ORE:
-                tripState = BFTripState.BELT_DEPOSIT_ORE;
-                break;
-            case BANK_DEPOSIT_BARS:
-                tripState = BFTripState.BANK_WITHDRAW_COAL_1;
-                break;
-            default:
-                break;
-        }
+        int invCoal = countItem(items, BFConstants.ITEM_COAL);
+        int invOre = bt != null ? countItem(items, bt.getOreItemId()) : 0;
+        int invBars = bt != null ? countItem(items, bt.getBarItemId()) : 0;
+        int freeSlots = countFreeSlots(items);
+
+        int furnaceCoal = client.getVarbitValue(BFConstants.VAR_FURNACE_COAL);
+        int furnaceOre = bt != null ? client.getVarbitValue(bt.getFurnaceOreVarbit()) : 0;
+        int furnaceBars = bt != null ? client.getVarbitValue(bt.getFurnaceBarVarbit()) : 0;
+        int dispenserState = client.getVarbitValue(BFConstants.VAR_DISPENSER_STATE);
+
+        return BFStateSnapshot.builder()
+            .barType(bt)
+            .bankOpen(bankOpen)
+            .invCoal(invCoal)
+            .invOre(invOre)
+            .invBars(invBars)
+            .freeSlots(freeSlots)
+            .coalBagHasCoal(coalBagFull)
+            .furnaceCoal(furnaceCoal)
+            .furnaceOre(furnaceOre)
+            .furnaceBars(furnaceBars)
+            .dispenserState(dispenserState)
+            .holdingCoins(countItem(items, BFConstants.ITEM_COINS) > 0)
+            .cofferLow(isCofferLow())
+            .cofferCritical(isCofferCritical())
+            .build();
     }
 
     @Subscribe
@@ -242,10 +276,6 @@ public class BlastFurnaceHelperPlugin extends Plugin
                 if (oreDelta < 0 && !bankOpen)
                 {
                     oreDeposited += Math.abs(oreDelta);
-                    if (tripState == BFTripState.BELT_DEPOSIT_ORE)
-                    {
-                        tripState = BFTripState.AWAITING_BARS;
-                    }
                 }
 
                 int barDelta = countItem(current, bt.getBarItemId())
@@ -253,29 +283,11 @@ public class BlastFurnaceHelperPlugin extends Plugin
                 if (barDelta > 0 && !bankOpen)
                 {
                     barsCollected += barDelta;
-                    tripState = BFTripState.BANK_DEPOSIT_BARS;
-                }
-
-                if (barDelta < 0 && bankOpen && tripState == BFTripState.BANK_DEPOSIT_BARS)
-                {
-                    tripState = BFTripState.BANK_WITHDRAW_COAL_1;
                 }
             }
         }
 
         prevInventory = current.clone();
-    }
-
-    @Subscribe
-    public void onVarbitChanged(VarbitChanged event)
-    {
-        if (!isInBlastFurnace()) return;
-        int dispenserState = client.getVarbitValue(BFConstants.VAR_BAR_DISPENSER);
-        if (dispenserState > 0
-            && (tripState == BFTripState.AWAITING_BARS || tripState == BFTripState.BELT_DEPOSIT_ORE))
-        {
-            tripState = BFTripState.COLLECT_BARS;
-        }
     }
 
     @Subscribe
@@ -297,14 +309,6 @@ public class BlastFurnaceHelperPlugin extends Plugin
                 coalBagFull = false;
             }
         }
-
-        if (event.getId() == BFConstants.CONVEYOR_BELT)
-        {
-            if (tripState == BFTripState.BELT_DEPOSIT_COAL && !coalBagFull)
-            {
-                tripState = BFTripState.BANK_WITHDRAW_ORE;
-            }
-        }
     }
 
     @Subscribe
@@ -321,24 +325,25 @@ public class BlastFurnaceHelperPlugin extends Plugin
 
     private void trackObject(GameObject obj, boolean spawned)
     {
-        switch (obj.getId())
+        int id = obj.getId();
+        if (id == BFConstants.CONVEYOR_BELT)
         {
-            case BFConstants.CONVEYOR_BELT:
-                conveyorBelt = spawned ? obj : null;
-                break;
-            case BFConstants.BAR_DISPENSER:
-                barDispenser = spawned ? obj : null;
-                break;
-            case BFConstants.BANK_CHEST:
-                bankChest = spawned ? obj : null;
-                break;
-            // Coffer: three visual states — empty (29328), full/deposited (29329), active (29330).
-            // Source: github.com/runelite/runelite runelite-api/.../gameval/ObjectID.java (BSD-2-Clause)
-            case BFConstants.COFFER_EMPTY:
-            case BFConstants.COFFER_FULL:
-            case BFConstants.COFFER_ACTIVE:
-                cofferObject = spawned ? obj : null;
-                break;
+            conveyorBelt = spawned ? obj : null;
+        }
+        else if (BFConstants.isDispenserObject(id))
+        {
+            // Dispenser cycles through 9092-9096 by state; keep the highlight on it regardless.
+            barDispenser = spawned ? obj : null;
+        }
+        else if (id == BFConstants.BANK_CHEST)
+        {
+            bankChest = spawned ? obj : null;
+        }
+        else if (id == BFConstants.COFFER_EMPTY
+            || id == BFConstants.COFFER_FULL
+            || id == BFConstants.COFFER_ACTIVE)
+        {
+            cofferObject = spawned ? obj : null;
         }
     }
 
@@ -379,31 +384,6 @@ public class BlastFurnaceHelperPlugin extends Plugin
         }
     }
 
-    private void selfCorrectState()
-    {
-        ItemContainer inv = client.getItemContainer(InventoryID.INVENTORY);
-        if (inv == null) return;
-
-        Item[] items = inv.getItems();
-        BarType bt = getEffectiveBarType();
-
-        if (bt != null && countItem(items, bt.getBarItemId()) > 0)
-        {
-            if (tripState != BFTripState.BANK_DEPOSIT_BARS && tripState != BFTripState.COLLECT_BARS)
-            {
-                tripState = BFTripState.BANK_DEPOSIT_BARS;
-            }
-        }
-
-        if (bt != null && countItem(items, bt.getOreItemId()) > 0 && !bankOpen)
-        {
-            if (tripState == BFTripState.IDLE)
-            {
-                tripState = BFTripState.BELT_DEPOSIT_ORE;
-            }
-        }
-    }
-
     int countItem(Item[] items, int itemId)
     {
         if (items == null) return 0;
@@ -418,32 +398,35 @@ public class BlastFurnaceHelperPlugin extends Plugin
         return count;
     }
 
+    private int countFreeSlots(Item[] items)
+    {
+        if (items == null) return 28;
+        int used = 0;
+        for (Item item : items)
+        {
+            if (item != null && item.getId() > 0 && item.getQuantity() > 0)
+            {
+                used++;
+            }
+        }
+        return Math.max(0, 28 - used);
+    }
+
     // ── Coffer helpers ────────────────────────────────────────────────────────
 
-    /**
-     * Returns estimated minutes of coffer time remaining.
-     * Drain rate: 1,200 gp/min (OSRS Wiki "Blast Furnace", 2026-07-07).
-     */
+    /** Estimated minutes of coffer time remaining. Drain 1,200 gp/min (OSRS Wiki, 2026-07-11). */
     public double getCofferMinutesLeft()
     {
         if (cofferBalance <= 0) return 0.0;
         return (double) cofferBalance / BFConstants.COFFER_DRAIN_PER_MINUTE;
     }
 
-    /**
-     * Returns true when the coffer balance is at or below the critical GP threshold
-     * from config (cofferCriticalGp, default 0 = empty-only).
-     */
     public boolean isCofferCritical()
     {
         if (!config.cofferEnabled() || cofferBalance < 0) return false;
         return cofferBalance <= config.cofferCriticalGp();
     }
 
-    /**
-     * Returns true when the coffer balance is below the low-minutes threshold
-     * but above the critical threshold.
-     */
     public boolean isCofferLow()
     {
         if (!config.cofferEnabled() || cofferBalance < 0) return false;
@@ -451,10 +434,6 @@ public class BlastFurnaceHelperPlugin extends Plugin
         return getCofferMinutesLeft() < config.cofferLowMinutes();
     }
 
-    /**
-     * Returns true when the player is holding coins (item 995) in their inventory.
-     * Used to decide whether to highlight the coffer for deposit.
-     */
     public boolean isHoldingCoins()
     {
         ItemContainer inv = client.getItemContainer(InventoryID.INVENTORY);

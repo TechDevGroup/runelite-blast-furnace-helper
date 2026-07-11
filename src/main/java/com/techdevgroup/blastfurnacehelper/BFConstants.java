@@ -15,10 +15,30 @@ public final class BFConstants {
     // BF minigame region (RuneLite BlastFurnacePlugin)
     public static final int BF_REGION = 7757;
 
-    // Game object IDs (RuneLite BlastFurnacePlugin / ObjectID)
+    // Game object IDs — RuneLite gameval/ObjectID.java (BSD-2-Clause).
+    /** Clickable conveyor belt ("Put-ore-on"): BLAST_FURNACE_CONVEYER_BELT_CLICKABLE = 9100. */
     public static final int CONVEYOR_BELT  = 9100;
-    public static final int BAR_DISPENSER  = 9104;
+    /** BF bank chest object. */
     public static final int BANK_CHEST     = 26707;
+
+    // Bar dispenser objects — RuneLite gameval/ObjectID.java (BSD-2-Clause).
+    // The dispenser cycles through several object IDs depending on its state; we track
+    // the whole family so the highlight follows it regardless of state. RuneLite core's
+    // BlastFurnacePlugin tracks BLAST_FURNACE_DISPENSER (9092). The earlier 9104 value was
+    // wrong — 9104 is BLAST_FURNACE_CONVEYER_COGS2 (a cog), not the dispenser.
+    public static final int DISPENSER_BASE    = 9092; // BLAST_FURNACE_DISPENSER
+    public static final int DISPENSER_EMPTY   = 9093; // BLAST_FURNACE_ORE_DISPENSER_EMPTY
+    public static final int DISPENSER_FORANIM = 9094; // BLAST_FURNACE_ORE_DISPENSER_FORANIM
+    public static final int DISPENSER_FULL    = 9095; // BLAST_FURNACE_ORE_DISPENSER_FULL (Take)
+    public static final int DISPENSER_COOLED  = 9096; // BLAST_FURNACE_ORE_DISPENSER_COOLED (Take/Check)
+    public static final int[] DISPENSER_IDS = {
+        DISPENSER_BASE, DISPENSER_EMPTY, DISPENSER_FORANIM, DISPENSER_FULL, DISPENSER_COOLED
+    };
+
+    public static boolean isDispenserObject(int id) {
+        for (int d : DISPENSER_IDS) { if (d == id) return true; }
+        return false;
+    }
 
     // Coffer game object IDs
     // Source: github.com/runelite/runelite runelite-api/.../gameval/ObjectID.java (BSD-2-Clause)
@@ -29,15 +49,31 @@ public final class BFConstants {
     public static final int COFFER_FULL   = 29329;
     public static final int COFFER_ACTIVE = 29330;
 
-    // Varbit IDs (RuneLite Varbits enum)
-    /** Coal stored in the blast furnace. */
-    public static final int VAR_COAL_STORED   = 1611;
-    /** Bar dispenser state; > 0 means bars are ready. */
-    public static final int VAR_BAR_DISPENSER = 1617;
+    // Furnace-content varbit IDs — RuneLite gameval/VarbitID.java (BSD-2-Clause),
+    // the same varbits RuneLite core's BlastFurnaceOverlay reads via the BarsOres enum.
+    /** Coal currently stored in the furnace: BLAST_FURNACE_COAL = 949. */
+    public static final int VAR_FURNACE_COAL       = 949;
+    /** Iron ore in furnace (also the ore used for steel): BLAST_FURNACE_IRON_ORE = 951. */
+    public static final int VAR_FURNACE_IRON_ORE   = 951;
+    public static final int VAR_FURNACE_MITHRIL_ORE   = 952;
+    public static final int VAR_FURNACE_ADAMANTITE_ORE = 953;
+    public static final int VAR_FURNACE_RUNITE_ORE = 954;
+    /** Finished bars waiting in the dispenser, per type. */
+    public static final int VAR_FURNACE_IRON_BARS       = 942;
+    public static final int VAR_FURNACE_STEEL_BARS      = 943;
+    public static final int VAR_FURNACE_MITHRIL_BARS    = 944;
+    public static final int VAR_FURNACE_ADAMANTITE_BARS = 945;
+    public static final int VAR_FURNACE_RUNITE_BARS     = 946;
+    /**
+     * Dispenser / smelting state: BLAST_FURNACE_BARS_HOT = 936.
+     * Semantics (from RuneLite core BlastFurnaceClickBoxOverlay):
+     *   1 = ore on belt not yet smelted (belt busy), 2 = bars hot (need ice gloves to take),
+     *   3 = bars cooled (safe to take).
+     */
+    public static final int VAR_DISPENSER_STATE = 936;
     /**
      * Coffer balance in GP.
-     * Source: github.com/runelite/runelite runelite-api/.../gameval/VarbitID.java (BSD-2-Clause)
-     * VarbitID.BLAST_FURNACE_COFFER = 5357.
+     * Source: RuneLite gameval/VarbitID.java (BSD-2-Clause) VarbitID.BLAST_FURNACE_COFFER = 5357.
      * Used by RuneLite's built-in BlastFurnaceCofferOverlay via
      *   client.getVarbitValue(VarbitID.BLAST_FURNACE_COFFER).
      */
@@ -69,6 +105,14 @@ public final class BFConstants {
 
     // Coal bag capacity (OSRS Wiki)
     public static final int COAL_BAG_CAPACITY = 27;
+    /** Loose coal to withdraw per coal trip (fills inventory alongside the bag). */
+    public static final int COAL_INV_LOAD = 27;
+    /** Ore to withdraw per ore trip (near-full inventory, leaving room to work). */
+    public static final int ORE_LOAD = 27;
+
+    // Inventory widget group — RuneLite WidgetID (INVENTORY group = 149, container child 0).
+    public static final int INVENTORY_GROUP_ID = 149;
+    public static final int INVENTORY_CONTAINER_CHILD = 0;
 
     // Coffer drain rates — OSRS Wiki "Blast Furnace", retrieved 2026-07-07.
     // 72,000 gp/hr = 1,200 gp/min = 12 gp/tick on BF worlds while furnace is operating.
