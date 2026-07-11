@@ -114,6 +114,8 @@ standard value here).
 | `worldArrowColor` | Cyan | Color of the bobbing world arrow |
 | `predictNextTarget` | On | Pre-aim: ghost marker where the next bank withdrawal will appear |
 | `predictColor` | Purple | Color of the predicted-position (pre-aim) marker |
+| `showTileHotspots` | On | Mark the learned tile to stand on before the current interaction |
+| `tileHotspotColor` | Green | Color of the standing-tile hotspot marker |
 | `showPanel` | On | Toggle the stats overlay |
 | `cofferEnabled` | On | Enable coffer balance tracking and highlights |
 | `cofferLowMinutes` | 20 min | Highlight coffer as LOW when time remaining is below this |
@@ -212,6 +214,18 @@ hardcoded grid math:
   marker if that item was never seen — no wild guessing). Item id is the key, so a remembered
   position survives bank reordering as long as the slot was seen at least once.
 
+## Standing-Tile Hotspots
+
+For the current world-object target, the plugin marks the **tile to stand on** before interacting
+(you often walk to a specific tile to reach the dispenser/belt). This is **self-learning**: every
+time you interact with a tracked object the plugin records the tile you stood on (dispenser state
+variants are canonicalised to one id), and the most-frequent tile is highlighted. It is **seeded**
+from observed play (bar dispenser (1940,4962) ×30 / (1942,4967) ×60; belt & bank chest tiles) so
+it is useful immediately, and real interactions accumulate on top and take over. Persisted to
+`~/.runelite/blast-furnace-helper/hotspots.json`. If nothing is learned for an object, it simply
+shows no tile (the world arrow still points at the object). Config `showTileHotspots` +
+`tileHotspotColor`. Rendered as a tile polygon via `Perspective.getCanvasTilePoly`.
+
 ## Structural Reference
 
 quest-helper ([github.com/Zoinkwiz/quest-helper](https://github.com/Zoinkwiz/quest-helper), BSD-2)
@@ -220,6 +234,12 @@ highlights, ALWAYS_ON_TOP for widget highlights), hub registration structure, an
 drawing technique (`DirectionArrow.drawWorldArrow`, re-implemented independently).
 
 ## Changelog
+
+### v0.2.5
+- **Coal-sufficiency threshold fixed** (data-backed): `furnaceNeedsLooseCoal` now compares against a full ore load — `furnaceCoal + bagCapacity < ratio × (furnaceOre + ORE_LOAD)` — instead of `+ 1`. A small residual coal amount no longer reads as "enough". For adamantite (ratio 3, ORE_LOAD 27, bag 27) the switch point is `fcoal < 54`, matching the user's observed furnace-coal-driven split: `fcoal≈2` → 2-coal trip, `fcoal≈56` → 1-coal+1-ore trip.
+- **Bar collection corrected to a return-leg step** (data-backed, supersedes a wrong preempt idea): ready bars do **not** preempt the bank withdrawal. Verbatim `actions.log` shows the player preps the next load with bars still queued, walks past the dispenser with a full inventory, deposits on the belt, and only then — empty-handed on the return leg — collects. `COLLECT_BARS` is gated on `furnaceBars > 0 && freeSlots > 0` in the return-leg tail; it never fires while carrying a load or at the bank.
+- **Standing-tile hotspots**: self-learning marker for the tile to stand on before interacting with the current object; seeded from observed play, persisted to `~/.runelite/blast-furnace-helper/hotspots.json`. Config `showTileHotspots` + `tileHotspotColor`.
+- Verified with trace harnesses (coal threshold 5 cases incl. the 2/56 split; return-leg collect 4 cases; hotspot seed/learn/persist round-trip).
 
 ### v0.2.4
 - **Location-aware policy (biggest fix)**: the guidance was station-blind and conflated a coal-bag *fill* with a belt *deposit* (both consume inventory coal). Added location context to the snapshot — `bankOpen` plus belt/bank proximity (`atBank`, `atBelt`) — and gated the loop on it: fills/withdrawals only at the bank, deposits/empties only at the belt. Ground-truth `actions.log` anchors (bank ≈ 1948,4957; belt ≈ 1940,4965) + live GameObject proximity, radius 3.
@@ -268,7 +288,7 @@ To load locally without Plugin Hub:
 
 1. Build: `./gradlew build` (requires JDK 11)
 2. In RuneLite launcher, add `--dev` flag or use **RuneLite → Plugin Hub → Load from file**
-3. Point to `build/libs/runelite-blast-furnace-helper-0.2.4.jar`
+3. Point to `build/libs/runelite-blast-furnace-helper-0.2.5.jar`
 
 Alternatively, place the jar in `~/.runelite/plugins/` (external plugin folder if configured).
 

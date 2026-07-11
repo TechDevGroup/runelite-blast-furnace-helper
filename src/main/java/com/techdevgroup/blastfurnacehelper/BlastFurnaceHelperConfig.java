@@ -66,6 +66,19 @@ public interface BlastFurnaceHelperConfig extends Config
         position = 43)
     default Color predictColor() { return new Color(200, 0, 255, 180); }
 
+    @ConfigItem(keyName = "showTileHotspots", name = "Show Standing-Tile Hotspot",
+        description = "Mark the learned tile to stand on before interacting with the current "
+            + "target object (dispenser, belt, bank chest, coffer). Self-learning from your own "
+            + "interactions; seeded from observed play. Indicator only.",
+        position = 44)
+    default boolean showTileHotspots() { return true; }
+
+    @Alpha
+    @ConfigItem(keyName = "tileHotspotColor", name = "Tile Hotspot Color",
+        description = "Color of the standing-tile hotspot marker (distinct from item/widget predictions).",
+        position = 45)
+    default Color tileHotspotColor() { return new Color(0, 255, 128, 160); }
+
     @ConfigItem(keyName = "showPanel", name = "Show Trip Computer",
         description = "Show the trip computer overlay with session stats.",
         position = 5)

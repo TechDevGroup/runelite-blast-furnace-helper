@@ -109,6 +109,10 @@ public class BlastFurnaceHelperPlugin extends Plugin
     private BFStateSnapshot lastSnapshot = null;
     private boolean bankLayoutDirty = false;
 
+    // Self-learning standing-tile hotspots per object, persisted across sessions.
+    @Getter private final HotspotStore hotspots = new HotspotStore();
+    private boolean hotspotsDirty = false;
+
     @Override
     protected void startUp()
     {
@@ -116,8 +120,9 @@ public class BlastFurnaceHelperPlugin extends Plugin
         overlayManager.add(widgetOverlay);
         overlayManager.add(panel);
         keyManager.registerKeyListener(resetHotkeyListener);
-        // Load the previously-seen bank layout so pre-aim works from the start of the run.
+        // Load persisted pre-aim data (or seed defaults) so hints work from the start of a run.
         bankLayout.load(BFActionLogger.DIR.resolve("bank-layout.json"));
+        hotspots.load(BFActionLogger.DIR.resolve("hotspots.json"));
         resetStats();
     }
 
@@ -132,6 +137,11 @@ public class BlastFurnaceHelperPlugin extends Plugin
         {
             bankLayout.save(BFActionLogger.DIR.resolve("bank-layout.json"));
             bankLayoutDirty = false;
+        }
+        if (hotspotsDirty)
+        {
+            hotspots.save(BFActionLogger.DIR.resolve("hotspots.json"));
+            hotspotsDirty = false;
         }
         clearTransientState();
     }
@@ -379,12 +389,49 @@ public class BlastFurnaceHelperPlugin extends Plugin
             }
         }
 
+        // Self-learning standing-tile hotspots: when the player interacts with a tracked object,
+        // record the tile they stood on (canonicalising dispenser/coffer state variants).
+        int canon = canonicalObjectId(event.getId());
+        if (canon != 0)
+        {
+            WorldPoint p = playerLocation();
+            if (p != null && p.getRegionID() == BFConstants.BF_REGION)
+            {
+                hotspots.record(canon, p.getX(), p.getY());
+                hotspotsDirty = true;
+            }
+        }
+
         // Ground-truth capture: pair what the player actually clicked against what the policy
         // recommended at that same moment. The snapshot is rebuilt here so it reflects state at
         // click time (coal-bag state above is already applied).
         if (config.logActions())
         {
             logClick(event);
+        }
+    }
+
+    /** Maps an object id (including dispenser/coffer state variants) to its canonical id, or 0. */
+    private static int canonicalObjectId(int id)
+    {
+        if (id == BFConstants.CONVEYOR_BELT) return BFConstants.CONVEYOR_BELT;
+        if (BFConstants.isDispenserObject(id)) return BFConstants.DISPENSER_BASE;
+        if (id == BFConstants.BANK_CHEST) return BFConstants.BANK_CHEST;
+        if (id == BFConstants.COFFER_EMPTY || id == BFConstants.COFFER_FULL
+            || id == BFConstants.COFFER_ACTIVE) return BFConstants.COFFER_EMPTY;
+        return 0;
+    }
+
+    /** The learned standing-tile hotspot ({x,y}) for the current guidance object target, or null. */
+    public int[] hotspotTileFor(BFAction.ObjTarget target)
+    {
+        switch (target)
+        {
+            case CONVEYOR:   return hotspots.best(BFConstants.CONVEYOR_BELT);
+            case DISPENSER:  return hotspots.best(BFConstants.DISPENSER_BASE);
+            case BANK_CHEST: return hotspots.best(BFConstants.BANK_CHEST);
+            case COFFER:     return hotspots.best(BFConstants.COFFER_EMPTY);
+            default:         return null;
         }
     }
 

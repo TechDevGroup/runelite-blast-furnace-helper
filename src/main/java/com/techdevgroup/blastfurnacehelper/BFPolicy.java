@@ -59,6 +59,14 @@ final class BFPolicy {
             return BFGuidance.of(BFAction.GO_TO_BANK);
         }
 
+        // NOTE: ready bars do NOT preempt the bank withdrawal. Verbatim actions.log shows the
+        // player prepares the next load at the bank (bars from the previous load stay in the
+        // dispenser), walks past the dispenser with a full inventory, deposits on the belt, and
+        // only THEN — empty-handed on the return leg — collects the bars. COLLECT_BARS is
+        // therefore a return-leg step (see the tail below), gated on free inventory space so it
+        // fires only after the belt deposit. WITHDRAW_ORE naturally happens only once the
+        // dispenser was cleared last trip.
+
         // 3. AT THE BANK (interface open) → acquire the next material. Coal-before-ore; the
         //    loose-coal-vs-ore decision comes from the furnace state (see bankAcquire).
         if (s.isBankOpen()) {
@@ -165,13 +173,20 @@ final class BFPolicy {
 
     /**
      * Furnace-derived loose-coal decision. Even after the coal bag's full capacity is deposited,
-     * would the furnace still be short of coal for the ore it holds (plus one more unit we would
-     * add)? Pure function of the furnace varbits and ratio — no inventory heuristics. Returns
-     * false (→ go straight to ore) for low ratios and whenever the bag alone covers the furnace,
-     * which is the "fill bag, then ore" trip the coal→ore transition must reach.
+     * would the furnace still be short of coal for the ore it holds PLUS a full ore load we are
+     * about to add? If so this is a "coal trip" (bring a loose coal load); otherwise the bag
+     * alone covers the ore and we go straight to it (a "1-coal + 1-ore trip").
+     *
+     * <p>Using a full {@link BFConstants#ORE_LOAD} (not +1) is what makes a small residual coal
+     * amount count as effectively empty: a fresh/near-empty furnace can never cover a whole ore
+     * load from the bag alone, so it correctly triggers a coal trip. This matches the user's
+     * observed furnace-coal-driven trip split (verbatim actions.log): at adamantite (ratio 3,
+     * ORE_LOAD 27, bag 27) the threshold is {@code fcoal < ratio*ORE_LOAD - bag = 3*27 - 27 = 54}
+     * — so {@code fcoal≈2} → 2-coal trip, {@code fcoal≈56} → 1-coal+1-ore trip. Pure function of
+     * the furnace varbits and ratio; no inventory heuristics.
      */
     private static boolean furnaceNeedsLooseCoal(BFStateSnapshot s, int ratio) {
         return s.getFurnaceCoal() + BFConstants.COAL_BAG_CAPACITY
-            < ratio * (s.getFurnaceOre() + 1);
+            < ratio * (s.getFurnaceOre() + BFConstants.ORE_LOAD);
     }
 }

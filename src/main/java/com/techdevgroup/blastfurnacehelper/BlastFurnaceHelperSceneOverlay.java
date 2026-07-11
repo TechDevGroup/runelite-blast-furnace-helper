@@ -3,6 +3,7 @@ package com.techdevgroup.blastfurnacehelper;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
+import java.awt.Polygon;
 import java.awt.Shape;
 import javax.inject.Inject;
 import net.runelite.api.Client;
@@ -10,6 +11,7 @@ import net.runelite.api.GameObject;
 import net.runelite.api.Perspective;
 import net.runelite.api.Point;
 import net.runelite.api.coords.LocalPoint;
+import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
@@ -56,7 +58,8 @@ public class BlastFurnaceHelperSceneOverlay extends Overlay
         // the derived guidance moves on — so the player never assumes a step is done early.
         if (!plugin.isBankOpen())
         {
-            GameObject target = resolveTargetObject(plugin.getGuidance().objectTarget());
+            BFAction.ObjTarget objTarget = plugin.getGuidance().objectTarget();
+            GameObject target = resolveTargetObject(objTarget);
             if (target != null)
             {
                 highlight(graphics, target, config.objectColor(), 20);
@@ -64,6 +67,11 @@ public class BlastFurnaceHelperSceneOverlay extends Overlay
                 {
                     renderWorldArrow(graphics, target);
                 }
+            }
+            // Learned standing-tile hotspot: where to stand before this interaction.
+            if (config.showTileHotspots() && objTarget != BFAction.ObjTarget.NONE)
+            {
+                renderTileHotspot(graphics, plugin.hotspotTileFor(objTarget));
             }
         }
 
@@ -92,6 +100,17 @@ public class BlastFurnaceHelperSceneOverlay extends Overlay
 
         int bob = (int) (Math.sin(client.getGameCycle() / BOB_PERIOD) * BOB_AMPLITUDE);
         WorldArrow.draw(graphics, config.worldArrowColor(), anchor.getX(), anchor.getY() + bob);
+    }
+
+    /** Outlines the learned standing tile ({x,y} world coords) for the current target object. */
+    private void renderTileHotspot(Graphics2D graphics, int[] tile)
+    {
+        if (tile == null) return;
+        LocalPoint lp = LocalPoint.fromWorld(client, new WorldPoint(tile[0], tile[1], client.getPlane()));
+        if (lp == null) return;
+        Polygon poly = Perspective.getCanvasTilePoly(client, lp);
+        if (poly == null) return;
+        OverlayUtil.renderPolygon(graphics, poly, config.tileHotspotColor());
     }
 
     private void renderCofferHighlight(Graphics2D graphics)
