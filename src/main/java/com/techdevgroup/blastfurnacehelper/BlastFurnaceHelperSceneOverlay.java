@@ -37,19 +37,53 @@ public class BlastFurnaceHelperSceneOverlay extends Overlay
     {
         if (!plugin.isInBlastFurnace() || plugin.isBankOpen()) return null;
 
+        // Step-based object highlight (conveyor belt, bar dispenser, bank chest)
         BFTripState state = plugin.getTripState();
         GameObject target = resolveTargetObject(state);
-        if (target == null) return null;
+        if (target != null)
+        {
+            Shape clickbox = target.getClickbox();
+            if (clickbox != null)
+            {
+                Color c = config.objectColor();
+                Color fill = new Color(c.getRed(), c.getGreen(), c.getBlue(), 20);
+                Point mousePos = client.getMouseCanvasPosition();
+                OverlayUtil.renderHoverableArea(graphics, clickbox, mousePos, fill, c.darker(), c);
+            }
+        }
 
-        Shape clickbox = target.getClickbox();
-        if (clickbox == null) return null;
-
-        Color c = config.objectColor();
-        Color fill = new Color(c.getRed(), c.getGreen(), c.getBlue(), 20);
-        Point mousePos = client.getMouseCanvasPosition();
-        OverlayUtil.renderHoverableArea(graphics, clickbox, mousePos, fill, c.darker(), c);
+        // Coffer highlight: show when coffer is low/critical, or when holding coins to deposit.
+        // Overlay-only — never automates input.
+        if (config.cofferEnabled())
+        {
+            renderCofferHighlight(graphics);
+        }
 
         return null;
+    }
+
+    /**
+     * Renders the coffer object highlight when the coffer is low, critical, or the player
+     * is holding coins and should walk to the coffer to top it up.
+     */
+    private void renderCofferHighlight(Graphics2D graphics)
+    {
+        boolean isCritical = plugin.isCofferCritical();
+        boolean isLow = plugin.isCofferLow();
+        boolean holdingCoinsAndLow = plugin.isHoldingCoins() && (isLow || isCritical);
+
+        if (!isCritical && !isLow && !holdingCoinsAndLow) return;
+
+        GameObject coffer = plugin.getCofferObject();
+        if (coffer == null) return;
+
+        Color c = isCritical ? config.cofferCriticalColor() : config.cofferLowColor();
+        Shape clickbox = coffer.getClickbox();
+        if (clickbox == null) return;
+
+        Color fill = new Color(c.getRed(), c.getGreen(), c.getBlue(), 30);
+        Point mousePos = client.getMouseCanvasPosition();
+        OverlayUtil.renderHoverableArea(graphics, clickbox, mousePos, fill, c.darker(), c);
     }
 
     private GameObject resolveTargetObject(BFTripState state)

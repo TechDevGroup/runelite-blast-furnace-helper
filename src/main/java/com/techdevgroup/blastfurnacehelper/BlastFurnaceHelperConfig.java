@@ -37,4 +37,34 @@ public interface BlastFurnaceHelperConfig extends Config
         description = "Show the trip computer overlay with session stats.",
         position = 5)
     default boolean showPanel() { return true; }
+
+    @ConfigItem(keyName = "cofferEnabled", name = "Coffer Tracking",
+        description = "Enable coffer balance tracking, highlights, and trip-computer cost line.",
+        position = 6)
+    default boolean cofferEnabled() { return true; }
+
+    @ConfigItem(keyName = "cofferLowMinutes", name = "Coffer Low Threshold (min)",
+        description = "Highlight coffer as LOW when estimated time remaining is below this many minutes. "
+            + "Default 20 min ≈ 24,000 gp at 1,200 gp/min (OSRS Wiki).",
+        position = 7)
+    @Range(min = 1, max = 120)
+    default int cofferLowMinutes() { return 20; }
+
+    @ConfigItem(keyName = "cofferCriticalGp", name = "Coffer Critical Threshold (gp)",
+        description = "Highlight coffer as CRITICAL when balance is at or below this amount (0 = empty only).",
+        position = 8)
+    @Range(min = 0, max = 50000)
+    default int cofferCriticalGp() { return 0; }
+
+    @Alpha
+    @ConfigItem(keyName = "cofferLowColor", name = "Coffer Low Color",
+        description = "Highlight color for the coffer object and panel text when coffer is low.",
+        position = 9)
+    default Color cofferLowColor() { return new Color(255, 200, 0, 220); }
+
+    @Alpha
+    @ConfigItem(keyName = "cofferCriticalColor", name = "Coffer Critical Color",
+        description = "Highlight color for the coffer object and panel alert when coffer is critical or empty.",
+        position = 10)
+    default Color cofferCriticalColor() { return new Color(255, 0, 0, 220); }
 }

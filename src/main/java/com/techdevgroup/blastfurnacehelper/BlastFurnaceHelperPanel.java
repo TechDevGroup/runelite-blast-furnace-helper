@@ -1,5 +1,6 @@
 package com.techdevgroup.blastfurnacehelper;
 
+import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.time.Duration;
@@ -73,6 +74,41 @@ public class BlastFurnaceHelperPanel extends OverlayPanel
                 .left("Bars/hr").right(String.valueOf(barsHr)).build());
             panelComponent.getChildren().add(LineComponent.builder()
                 .left("Ore/hr").right(String.valueOf(oreHr)).build());
+        }
+
+        // Coffer section — balance, time remaining, standing cost line.
+        // Drain rate: 72,000 gp/hr (OSRS Wiki "Blast Furnace", 2026-07-07).
+        if (config.cofferEnabled() && plugin.getCofferBalance() >= 0)
+        {
+            int cofferBal = plugin.getCofferBalance();
+            double minsLeft = plugin.getCofferMinutesLeft();
+
+            panelComponent.getChildren().add(LineComponent.builder()
+                .left("─ Coffer ─").right("").build());
+
+            panelComponent.getChildren().add(LineComponent.builder()
+                .left("Balance").right(String.format("%,d gp", cofferBal)).build());
+
+            if (plugin.isCofferCritical())
+            {
+                panelComponent.getChildren().add(LineComponent.builder()
+                    .left("Status").right("EMPTY — refill!")
+                    .rightColor(config.cofferCriticalColor()).build());
+            }
+            else if (plugin.isCofferLow())
+            {
+                panelComponent.getChildren().add(LineComponent.builder()
+                    .left("Time left").right(String.format("~%.0f min", minsLeft))
+                    .rightColor(config.cofferLowColor()).build());
+            }
+            else
+            {
+                panelComponent.getChildren().add(LineComponent.builder()
+                    .left("Time left").right(String.format("~%.0f min", minsLeft)).build());
+            }
+
+            panelComponent.getChildren().add(LineComponent.builder()
+                .left("Coffer cost/hr").right("72,000 gp").build());
         }
 
         return super.render(graphics);

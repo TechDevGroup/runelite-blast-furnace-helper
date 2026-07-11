@@ -97,6 +97,15 @@ public class BlastFurnaceHelperWidgetOverlay extends Overlay
             default:
                 break;
         }
+
+        // Coffer refill: when coffer is low or critical and bank is open,
+        // highlight coins (item 995) so the player knows to withdraw and top up.
+        // Overlay-only — never automates input.
+        if (config.cofferEnabled() && (plugin.isCofferLow() || plugin.isCofferCritical()))
+        {
+            targets.add(BFConstants.ITEM_COINS);
+        }
+
         return targets;
     }
 

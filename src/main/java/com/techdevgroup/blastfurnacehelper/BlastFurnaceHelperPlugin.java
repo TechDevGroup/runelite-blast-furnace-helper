@@ -50,12 +50,21 @@ public class BlastFurnaceHelperPlugin extends Plugin
     @Getter private GameObject conveyorBelt = null;
     @Getter private GameObject barDispenser = null;
     @Getter private GameObject bankChest = null;
+    /** The Blast Furnace coffer object (any of the three states: empty/full/active). */
+    @Getter private GameObject cofferObject = null;
 
     // Trip computer
     @Getter private Instant sessionStart = Instant.now();
     @Getter private int coalDeposited = 0;
     @Getter private int oreDeposited = 0;
     @Getter private int barsCollected = 0;
+
+    /**
+     * Coffer balance in GP, read from varbit 5357 (VarbitID.BLAST_FURNACE_COFFER).
+     * Source: github.com/runelite/runelite runelite-api/.../gameval/VarbitID.java (BSD-2-Clause).
+     * -1 = not yet read (before first tick in the BF region).
+     */
+    @Getter private int cofferBalance = -1;
 
     private Item[] prevInventory = null;
     private boolean prevBankOpen = false;
@@ -82,6 +91,8 @@ public class BlastFurnaceHelperPlugin extends Plugin
         conveyorBelt = null;
         barDispenser = null;
         bankChest = null;
+        cofferObject = null;
+        cofferBalance = -1;
     }
 
     @Provides
@@ -130,6 +141,8 @@ public class BlastFurnaceHelperPlugin extends Plugin
             conveyorBelt = null;
             barDispenser = null;
             bankChest = null;
+            cofferObject = null;
+            cofferBalance = -1;
         }
     }
 
@@ -140,6 +153,12 @@ public class BlastFurnaceHelperPlugin extends Plugin
         {
             if (tripState != BFTripState.IDLE) tripState = BFTripState.IDLE;
             return;
+        }
+
+        // Poll coffer balance every tick (varbit 5357 = VarbitID.BLAST_FURNACE_COFFER)
+        if (config.cofferEnabled())
+        {
+            cofferBalance = client.getVarbitValue(BFConstants.VAR_COFFER);
         }
 
         // Poll bank open/closed state
@@ -313,6 +332,13 @@ public class BlastFurnaceHelperPlugin extends Plugin
             case BFConstants.BANK_CHEST:
                 bankChest = spawned ? obj : null;
                 break;
+            // Coffer: three visual states — empty (29328), full/deposited (29329), active (29330).
+            // Source: github.com/runelite/runelite runelite-api/.../gameval/ObjectID.java (BSD-2-Clause)
+            case BFConstants.COFFER_EMPTY:
+            case BFConstants.COFFER_FULL:
+            case BFConstants.COFFER_ACTIVE:
+                cofferObject = spawned ? obj : null;
+                break;
         }
     }
 
@@ -390,5 +416,49 @@ public class BlastFurnaceHelperPlugin extends Plugin
             }
         }
         return count;
+    }
+
+    // ── Coffer helpers ────────────────────────────────────────────────────────
+
+    /**
+     * Returns estimated minutes of coffer time remaining.
+     * Drain rate: 1,200 gp/min (OSRS Wiki "Blast Furnace", 2026-07-07).
+     */
+    public double getCofferMinutesLeft()
+    {
+        if (cofferBalance <= 0) return 0.0;
+        return (double) cofferBalance / BFConstants.COFFER_DRAIN_PER_MINUTE;
+    }
+
+    /**
+     * Returns true when the coffer balance is at or below the critical GP threshold
+     * from config (cofferCriticalGp, default 0 = empty-only).
+     */
+    public boolean isCofferCritical()
+    {
+        if (!config.cofferEnabled() || cofferBalance < 0) return false;
+        return cofferBalance <= config.cofferCriticalGp();
+    }
+
+    /**
+     * Returns true when the coffer balance is below the low-minutes threshold
+     * but above the critical threshold.
+     */
+    public boolean isCofferLow()
+    {
+        if (!config.cofferEnabled() || cofferBalance < 0) return false;
+        if (isCofferCritical()) return false;
+        return getCofferMinutesLeft() < config.cofferLowMinutes();
+    }
+
+    /**
+     * Returns true when the player is holding coins (item 995) in their inventory.
+     * Used to decide whether to highlight the coffer for deposit.
+     */
+    public boolean isHoldingCoins()
+    {
+        ItemContainer inv = client.getItemContainer(InventoryID.INVENTORY);
+        if (inv == null) return false;
+        return countItem(inv.getItems(), BFConstants.ITEM_COINS) > 0;
     }
 }
