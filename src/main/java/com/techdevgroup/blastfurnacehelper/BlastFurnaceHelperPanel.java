@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.time.Instant;
 import javax.inject.Inject;
 import net.runelite.api.MenuAction;
+import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPanel;
 import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.components.LineComponent;
@@ -29,6 +30,8 @@ public class BlastFurnaceHelperPanel extends OverlayPanel
         this.plugin = plugin;
         this.config = config;
         setPosition(OverlayPosition.TOP_LEFT);
+        // ABOVE_WIDGETS so the status panel stays visible even when the bank (or any UI) is open.
+        setLayer(OverlayLayer.ABOVE_WIDGETS);
         // Right-click menu entry to zero the trip computer. Handled in the plugin via
         // OverlayMenuClicked — a UI action, never automated game input.
         addMenuEntry(MenuAction.RUNELITE_OVERLAY, BlastFurnaceHelperPlugin.RESET_MENU_OPTION,

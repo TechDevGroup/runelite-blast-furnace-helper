@@ -14,7 +14,7 @@ public enum BFAction {
     IDLE                ("Idle",                 ObjTarget.NONE),
     WITHDRAW_COINS      ("Withdraw coins",       ObjTarget.NONE),      // bank item = coins
     REFILL_COFFER       ("Refill coffer",        ObjTarget.COFFER),
-    FILL_COAL_BAG       ("Fill coal bag",        ObjTarget.NONE),      // bank item = coal
+    FILL_COAL_BAG       ("Fill coal bag",        ObjTarget.NONE),      // inventory item = coal bag
     WITHDRAW_COAL       ("Withdraw coal",        ObjTarget.NONE),      // bank item = coal
     WITHDRAW_ORE        ("Withdraw ore",         ObjTarget.NONE),      // bank item = ore
     GO_TO_BELT          ("Go to conveyor belt",  ObjTarget.CONVEYOR),

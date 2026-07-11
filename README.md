@@ -7,7 +7,7 @@ A RuneLite plugin that provides a trip computer, click-target highlights, and co
 - **State-derived guidance**: Every tick the plugin recomputes the single correct next action purely from observed game state (furnace coal/ore/bar varbits, dispenser state, inventory, coal-bag fullness, coffer balance). It is a pure function of state — no positional step counter — so it self-corrects if you arrive mid-cycle or act out of sequence.
 - **Click-target highlights**: Highlights the one object the guidance points at (conveyor belt, bar dispenser, or bank chest).
 - **Persistent world arrow**: A bobbing arrow floats above the current world-object target and stays there until that step's state is satisfied, so you never assume a step is finished while the arrow is still overhead.
-- **Bank item highlights**: When the bank is open, highlights the single next item to withdraw — coal (bag fill first) **before** ore — plus coins when the coffer is low, and a run-energy restorative when run energy is low.
+- **Bank item highlights (drawn over the bank UI)**: When the bank is open, highlights the single next item to withdraw — coal **before** ore — plus coins when the coffer is low, and a run-energy restorative when low. Highlights stay prevalent while any interface is open: the item overlay renders on `ABOVE_WIDGETS` so it sits on top of the bank rather than being hidden by it, and the status panel stays visible too. When the step is "fill coal bag", the coal bag is highlighted in the bankside inventory shown next to the bank.
 - **Opportunistic bar collection**: On the return leg to the bank, highlights the dispenser to collect bars as soon as at least one bar is ready and you have a free slot — never waits for a full 27-bar dispenser.
 - **Coal-bag emptying**: At the belt, highlights the coal bag in your inventory when it still holds coal and you have a free slot, so the bagged coal drops in to be dumped.
 - **Run-energy highlight**: When run energy is low, highlights the best restorative you carry (stamina potion → stamina mix → super energy → super energy mix → energy potion, highest dose first) — to withdraw if the bank is open, otherwise to drink from the inventory.
@@ -44,19 +44,33 @@ Additional behaviour (highlight-only, no automation):
 observed state it returns exactly one next action. It keeps no step index, so it is
 self-correcting — the same state always yields the same suggestion regardless of how you got
 there. Inputs: coal in furnace (varbit 949), this bar type's ore/bar counts in the furnace,
-dispenser state (varbit 936), inventory coal/ore/bar counts and free slots, coal-bag fullness,
+dispenser state (varbit 936), inventory coal/ore/bar counts and free slots, coal-bag contents,
 and coffer balance. Priority order:
 
 1. **Coffer critical** — withdraw coins (bank) or deposit them into the coffer (holding coins); the furnace halts when the coffer empties.
-2. **Bars in inventory** → deposit at bank.
-3. **Bank open** → acquire the next material: **coal first** (fill bag, then loose coal), and only once coal is satisfied, the primary ore. One target at a time.
-4. **At the belt** → empty the coal bag (if it holds coal and a slot is free), then deposit coal, then deposit ore — dump the carried load first.
-5. **Return leg** → opportunistically collect bars while passing the dispenser, as soon as ≥ 1 bar is ready (per-type bar varbit) and a slot is free. Never waits for a full 27-bar dispenser; reached only once the inventory has nothing left to deposit.
-6. Otherwise → return to the bank to restock.
+2. **Bars already in inventory** → deposit at bank.
+3. **Bank open** → acquire the next material under a **strict coal-before-ore invariant** (see below).
+4. **Return leg** (bank closed), in order:
+   1. loose coal/ore in inventory → deposit on the belt (one belt click deposits both);
+   2. else the coal bag still holds coal (and a slot is free) → empty the bag into the inventory;
+   3. else the dispenser has ≥ 1 bar ready (and a slot is free) → **collect bars — strictly before any bank trip**, so leftover coal never diverts you to the bank while bars are uncollected;
+   4. else the coffer is low and you hold coins → refill the coffer;
+   5. else → go to the bank to restock.
 
-Whether to bring coal or ore is decided from furnace state: coal is needed while
-`furnaceCoal < max(furnaceOre, 1) × coalPerBar`, which naturally alternates coal and ore trips
-the way the real Blast Furnace method does.
+### Strict Coal-Before-Ore Invariant
+
+The coal bag holds **only** coal, so from an empty inventory the bank sequence is strictly:
+**(1) withdraw coal → (2) fill the coal bag → (3) withdraw the loose coal load → (4) only then
+withdraw the primary ore.** Ore is *unreachable* in `derive()` until the bag is confidently full
+**and** a loose coal load is present — an explicit ordered guard, not a heuristic. If bag
+fullness is unknown/uncertain, it errs coal-first and never highlights ore.
+
+This is possible because coal-bag contents are tracked as an **authoritative count**, not a
+boolean: the count comes primarily from the coal-bag **chat messages** ("The coal bag is
+empty/now full", "…contains N pieces of coal"), with Fill/Empty menu clicks + inventory
+inference as a secondary source. A count that is merely "unknown" (`-1`, e.g. just after a
+relog) is treated as *not full* → coal-first. The earlier boolean toggle could falsely read
+"bag already full" and skip straight to ore; the count fixes that.
 
 ### Bar Types & Coal Ratios
 
@@ -170,6 +184,13 @@ drawing technique (`DirectionArrow.drawWorldArrow`, re-implemented independently
 
 ## Changelog
 
+### v0.2.3
+- **Highlights stay prevalent over open interfaces**: the bank/inventory item overlay moved to `OverlayLayer.ABOVE_WIDGETS` so bank-item highlights draw on top of the open bank UI instead of being occluded; the status panel is now `ABOVE_WIDGETS` too, so it stays visible with the bank open. No highlight is suppressed merely because a UI is open. (Scene/world highlights + the world arrow remain `ABOVE_SCENE`, naturally behind a full-screen bank, and reappear the instant it closes.)
+- **Coal-before-ore made a hard invariant**: rewrote the bank branch of `derive()` with an explicit ordered guard — ore literally cannot be returned until the coal bag is confidently full AND a loose coal load is present. Root cause of the ore-first bug: coal-bag fullness was a boolean that could falsely read "full", skipping the coal steps. Now coal-bag contents are tracked as an **authoritative count** parsed from the coal-bag **chat messages** (empty / now full / "contains N pieces of coal"), with Fill/Empty clicks + inventory inference secondary; unknown count → err coal-first. The "fill coal bag" step highlights the bag in the bankside inventory (group 15 child 3).
+- **Belt/return-leg ordering fixed**: the belt is highlighted only when the inventory actually has loose coal/ore to deposit; if nothing is depositable but the coal bag still holds coal, the coal bag (Empty) is highlighted instead — evaluated before the belt.
+- **Bar collection beats the bank**: when the dispenser has ≥ 1 bar and a free slot exists, `COLLECT_BARS` strictly precedes any bank guidance, so leftover coal no longer diverts you to the bank while bars are uncollected.
+- Verified by tracing `derive()`: empty-inventory-at-bank with a not-yet-full/unknown bag returns coal (fill-bag/withdraw-coal), never ore.
+
 ### v0.2.2
 - **Opportunistic bar collection**: the policy now collects bars on the return leg — as soon as ≥ 1 bar is ready (per-type bar varbit) and a free slot exists — instead of interrupting a deposit or waiting for a full 27-bar dispenser. The collect check moved below the belt-deposit block and gained a free-slot gate.
 - **Persistent world arrow**: a bobbing arrow (own re-implementation of quest-helper's `DirectionArrow.drawWorldArrow`, cited) floats above the current world-object target until the step's state is satisfied. `Perspective.localToCanvas` for the anchor; `sin(gameCycle/15)*8` bob. Config: `showWorldArrow` (default on), `worldArrowColor`.
@@ -203,7 +224,7 @@ To load locally without Plugin Hub:
 
 1. Build: `./gradlew build` (requires JDK 11)
 2. In RuneLite launcher, add `--dev` flag or use **RuneLite → Plugin Hub → Load from file**
-3. Point to `build/libs/runelite-blast-furnace-helper-0.2.2.jar`
+3. Point to `build/libs/runelite-blast-furnace-helper-0.2.3.jar`
 
 Alternatively, place the jar in `~/.runelite/plugins/` (external plugin folder if configured).
 

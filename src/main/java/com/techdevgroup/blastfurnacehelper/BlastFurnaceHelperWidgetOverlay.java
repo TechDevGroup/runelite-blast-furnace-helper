@@ -36,7 +36,9 @@ public class BlastFurnaceHelperWidgetOverlay extends Overlay
         this.config = config;
         this.client = client;
         setPosition(OverlayPosition.DYNAMIC);
-        setLayer(OverlayLayer.ALWAYS_ON_TOP);
+        // ABOVE_WIDGETS so bank/inventory item highlights draw on top of the open bank interface
+        // rather than being occluded. Highlights stay prevalent while any UI is open.
+        setLayer(OverlayLayer.ABOVE_WIDGETS);
         setPriority(OverlayPriority.HIGH);
     }
 
@@ -49,7 +51,15 @@ public class BlastFurnaceHelperWidgetOverlay extends Overlay
 
         if (plugin.isBankOpen())
         {
+            // Withdrawals in the bank grid, and (for FILL_COAL_BAG) the coal bag in the bankside
+            // inventory shown next to the bank.
             renderBankHighlights(graphics, g);
+            if (g.getInvItemId() >= 0)
+            {
+                Widget bankside = client.getWidget(BFConstants.BANKSIDE_GROUP_ID,
+                    BFConstants.BANKSIDE_ITEMS_CHILD);
+                highlightCoalBag(graphics, bankside, g.getInvItemId());
+            }
         }
         else
         {
@@ -123,6 +133,23 @@ public class BlastFurnaceHelperWidgetOverlay extends Overlay
             else if (energyItem >= 0 && id == energyItem)
             {
                 paint(graphics, child, config.bankItemColor());
+            }
+        }
+    }
+
+    /** Highlights the coal bag (12019/12020) within an arbitrary item container widget. */
+    private void highlightCoalBag(Graphics2D graphics, Widget container, int itemId)
+    {
+        if (container == null || container.isHidden()) return;
+        Widget[] children = container.getDynamicChildren();
+        if (children == null) return;
+        for (Widget child : children)
+        {
+            if (child == null || child.isHidden()) continue;
+            int id = child.getItemId();
+            if (id == itemId || id == BFConstants.ITEM_COAL_BAG_FULL)
+            {
+                paint(graphics, child, config.objectColor());
             }
         }
     }

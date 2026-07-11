@@ -18,7 +18,8 @@ public class BFStateSnapshot {
     int invOre;           // primary ore for the selected bar type
     int invBars;          // finished bars of the selected type
     int freeSlots;
-    boolean coalBagHasCoal;
+    boolean coalBagHasCoal; // bag holds > 0 coal (or count unknown → assume has coal)
+    boolean coalBagFull;    // bag confidently full (count >= capacity); unknown → false
 
     // Furnace (varbits)
     int furnaceCoal;

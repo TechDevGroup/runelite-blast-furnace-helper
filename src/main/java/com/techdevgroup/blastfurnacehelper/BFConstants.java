@@ -139,6 +139,11 @@ public final class BFConstants {
     public static final int INVENTORY_GROUP_ID = 149;
     public static final int INVENTORY_CONTAINER_CHILD = 0;
 
+    // Bankside inventory (the inventory shown beside the bank while it is open).
+    // Source: RuneLite gameval/InterfaceID.java — Bankside (group 15), ITEMS child = 3.
+    public static final int BANKSIDE_GROUP_ID = 15;
+    public static final int BANKSIDE_ITEMS_CHILD = 3;
+
     // Coffer drain rates — OSRS Wiki "Blast Furnace", retrieved 2026-07-07.
     // 72,000 gp/hr = 1,200 gp/min = 12 gp/tick on BF worlds while furnace is operating.
     // Foreman fee (Smithing < 60): 2,500 gp per 10 min (separate from coffer drain).

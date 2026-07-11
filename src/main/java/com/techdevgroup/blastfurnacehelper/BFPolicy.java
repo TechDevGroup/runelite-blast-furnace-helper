@@ -4,7 +4,7 @@ package com.techdevgroup.blastfurnacehelper;
  * State-derived guidance policy.
  *
  * <p>{@link #derive(BFStateSnapshot)} is a pure, idempotent function: given only the
- * currently observed game state (furnace varbits, inventory, coal-bag fullness, dispenser
+ * currently observed game state (furnace varbits, inventory, coal-bag contents, dispenser
  * state, coffer status) it returns the single correct next action. It holds no memory of a
  * step index, so it self-corrects when the player arrives mid-cycle or acts out of sequence —
  * the same inputs always yield the same suggestion.
@@ -13,13 +13,20 @@ package com.techdevgroup.blastfurnacehelper;
  * <ol>
  *   <li>Coffer critical: get / deposit coins (the furnace stops when the coffer empties).</li>
  *   <li>Finished bars in inventory: bank them.</li>
- *   <li>Bank open: acquire the next material — coal (bag first, then loose) BEFORE ore.</li>
- *   <li>At the belt: empty the coal bag (if it holds coal and a slot is free), then deposit
- *       coal, then deposit ore — dump the carried load first.</li>
- *   <li>Return leg: collect bars OPPORTUNISTICALLY while passing the dispenser — whenever at
- *       least one bar is ready and a free inventory slot exists. Never wait for a full 27-bar
- *       dispenser.</li>
- *   <li>Otherwise: return to the bank to restock.</li>
+ *   <li>Bank open: acquire the next material with a STRICT coal-before-ore guard — coal into
+ *       the bag, then a loose coal load, and only then ore. Ore can never be returned while any
+ *       coal step is pending; if bag fullness is unknown, err coal-first.</li>
+ *   <li>Return leg (bank closed):
+ *     <ol type="a">
+ *       <li>loose coal/ore in inventory → deposit on the belt;</li>
+ *       <li>else the coal bag still holds coal (and a slot is free) → empty the bag;</li>
+ *       <li>else the dispenser has ≥ 1 bar ready (and a slot is free) → collect bars — this
+ *           strictly precedes any bank trip, so leftover coal never diverts you to the bank
+ *           while bars are uncollected;</li>
+ *       <li>else the coffer is low and you hold coins → refill the coffer;</li>
+ *       <li>else → go to the bank to restock.</li>
+ *     </ol>
+ *   </li>
  * </ol>
  */
 final class BFPolicy {
@@ -43,7 +50,7 @@ final class BFPolicy {
             // No coins available — fall through and keep smithing; the panel shows the alert.
         }
 
-        // 2. Finished bars in the inventory → bank them.
+        // 2. Finished bars already in the inventory → bank them.
         if (s.getInvBars() > 0) {
             if (s.isBankOpen()) {
                 return BFGuidance.of(BFAction.DEPOSIT_BARS);
@@ -51,60 +58,74 @@ final class BFPolicy {
             return BFGuidance.of(BFAction.GO_TO_BANK);
         }
 
-        // 3. Bank open → acquire the next material. Coal before ore.
+        // 3. Bank open → acquire the next material under a strict coal-before-ore invariant.
         if (s.isBankOpen()) {
-            if (needsCoal(s, ratio)) {
-                if (ratio > 0 && !s.isCoalBagHasCoal()) {
-                    return BFGuidance.bankItem(BFAction.FILL_COAL_BAG, BFConstants.ITEM_COAL);
-                }
-                if (s.getInvCoal() < BFConstants.COAL_INV_LOAD) {
-                    return BFGuidance.bankItem(BFAction.WITHDRAW_COAL, BFConstants.ITEM_COAL);
-                }
-                // Coal loaded — leave the bank and carry it to the belt.
-                return BFGuidance.of(BFAction.GO_TO_BELT);
-            }
-            // Coal satisfied → withdraw ore (only now, after coal is handled).
-            if (s.getInvOre() < BFConstants.ORE_LOAD) {
-                return BFGuidance.bankItem(BFAction.WITHDRAW_ORE, bt.getOreItemId());
-            }
-            return BFGuidance.of(BFAction.GO_TO_BELT);
+            return bankAcquire(s, bt, ratio);
         }
 
-        // 4. At the belt (bank closed) → dump the carried load first, before collecting.
-        if (s.isCoalBagHasCoal() && s.getFreeSlots() > 0) {
-            return BFGuidance.invItem(BFAction.EMPTY_COAL_BAG, BFConstants.ITEM_COAL_BAG);
-        }
+        // 4. Return leg (bank closed).
+        // 4a. Loose coal or ore in the inventory → dump it on the belt (one click deposits both).
         if (s.getInvCoal() > 0) {
             return BFGuidance.of(BFAction.DEPOSIT_COAL);
         }
         if (s.getInvOre() > 0) {
             return BFGuidance.of(BFAction.DEPOSIT_ORE);
         }
-
-        // 5. Return leg: opportunistically collect bars while passing the dispenser.
-        //    Fires as soon as >= 1 bar is ready and a slot is free — the player takes whatever
-        //    has smelted on the way back, never waiting for a full 27-bar dispenser. This is
-        //    below the belt-deposit block so a carried load is always dumped first; it is only
-        //    reached once the inventory has nothing left to deposit (i.e. the return leg).
+        // 4b. Nothing loose to deposit, but the coal bag still holds coal → empty it into the
+        //     inventory (so its coal can then be dumped on the belt on the next step).
+        if (s.isCoalBagHasCoal() && s.getFreeSlots() > 0) {
+            return BFGuidance.invItem(BFAction.EMPTY_COAL_BAG, BFConstants.ITEM_COAL_BAG);
+        }
+        // 4c. Dispenser has bars ready and we have room → collect them BEFORE any bank trip.
+        //     Leftover coal must not divert to the bank while bars are still uncollected.
         if (s.getFurnaceBars() >= 1 && s.getFreeSlots() > 0) {
             return BFGuidance.of(BFAction.COLLECT_BARS);
         }
-
-        // 6. Nothing in hand and nothing to collect — go restock at the bank.
+        // 4d. Coffer low and we are carrying coins → top it up on the way past.
+        if (s.isCofferLow() && s.isHoldingCoins()) {
+            return BFGuidance.of(BFAction.REFILL_COFFER);
+        }
+        // 4e. Nothing to do here — head to the bank to restock.
         return BFGuidance.of(BFAction.GO_TO_BANK);
     }
 
     /**
-     * True when we should be bringing coal rather than ore. Iron (ratio 0) never needs coal.
-     * For coal-using bars we bring coal whenever the furnace's coal cannot cover the ore
-     * already inside it (or the furnace is essentially out of coal). This alternates coal and
-     * ore trips the way the real Blast Furnace method does, driven entirely by furnace state.
+     * Bank-phase material acquisition with a hard coal-before-ore guard.
+     *
+     * <p>For coal-using bars the order is strictly: (1) withdraw coal to fill the bag, (2) fill
+     * the bag, (3) withdraw the loose coal load, (4) only then withdraw the primary ore. Ore is
+     * unreachable until the bag is confidently full AND a loose coal load is present. If bag
+     * fullness is unknown/uncertain, {@code coalBagFull} is false and we err coal-first, so ore
+     * is never highlighted while the inventory could still be needed for coal.
      */
-    private static boolean needsCoal(BFStateSnapshot s, int ratio) {
-        if (ratio <= 0) {
-            return false;
+    private static BFGuidance bankAcquire(BFStateSnapshot s, BarType bt, int ratio) {
+        if (ratio > 0) {
+            // Coal steps first — the bag only holds coal, so it must be loaded before ore fills
+            // the inventory.
+            if (!s.isCoalBagFull()) {
+                // Need loose coal in the inventory to fill the bag with.
+                if (s.getInvCoal() <= 0) {
+                    return BFGuidance.bankItem(BFAction.WITHDRAW_COAL, BFConstants.ITEM_COAL);
+                }
+                // Coal in hand → fill the bag (an inventory-item action, highlighted in the
+                // bankside inventory while the bank is open).
+                return BFGuidance.invItem(BFAction.FILL_COAL_BAG, BFConstants.ITEM_COAL_BAG);
+            }
+            // Bag is confidently full → ensure a loose coal inventory load is present.
+            if (s.getInvCoal() <= 0) {
+                return BFGuidance.bankItem(BFAction.WITHDRAW_COAL, BFConstants.ITEM_COAL);
+            }
+            // Bag full AND a coal load present → ore may finally be withdrawn.
+            if (s.getInvOre() < BFConstants.ORE_LOAD) {
+                return BFGuidance.bankItem(BFAction.WITHDRAW_ORE, bt.getOreItemId());
+            }
+            return BFGuidance.of(BFAction.GO_TO_BELT);
         }
-        int oreForCoal = Math.max(s.getFurnaceOre(), 1);
-        return s.getFurnaceCoal() < oreForCoal * ratio;
+
+        // Iron (ratio 0) uses no coal at all.
+        if (s.getInvOre() < BFConstants.ORE_LOAD) {
+            return BFGuidance.bankItem(BFAction.WITHDRAW_ORE, bt.getOreItemId());
+        }
+        return BFGuidance.of(BFAction.GO_TO_BELT);
     }
 }

@@ -2,9 +2,12 @@ package com.techdevgroup.blastfurnacehelper;
 
 import com.google.inject.Provides;
 import java.time.Instant;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.inject.Inject;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.GameObject;
@@ -13,6 +16,7 @@ import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.MenuAction;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameObjectDespawned;
 import net.runelite.api.events.GameObjectSpawned;
 import net.runelite.api.events.GameStateChanged;
@@ -61,7 +65,13 @@ public class BlastFurnaceHelperPlugin extends Plugin
 
     // State
     @Getter private boolean bankOpen = false;
-    @Getter private boolean coalBagFull = false;
+    /**
+     * Authoritative coal-bag contents (pieces of coal). -1 = unknown.
+     * Sourced primarily from the coal-bag chat messages (parsed in onChatMessage); Fill/Empty
+     * menu clicks and inventory inference are secondary. Never a mere boolean, so the policy can
+     * tell "confidently full" (>= capacity) from "unknown" and err coal-first when unsure.
+     */
+    @Getter private int coalBagCount = -1;
     @Getter private BarType detectedBarType = null;
     /** The single next action, derived from observed state each tick. */
     @Getter private BFGuidance guidance = BFGuidance.of(BFAction.IDLE);
@@ -122,6 +132,7 @@ public class BlastFurnaceHelperPlugin extends Plugin
         bankChest = null;
         cofferObject = null;
         cofferBalance = -1;
+        coalBagCount = -1; // unknown after a relog/region change → err coal-first until observed
     }
 
     @Provides
@@ -250,6 +261,11 @@ public class BlastFurnaceHelperPlugin extends Plugin
         int furnaceBars = bt != null ? client.getVarbitValue(bt.getFurnaceBarVarbit()) : 0;
         int dispenserState = client.getVarbitValue(BFConstants.VAR_DISPENSER_STATE);
 
+        // coalBagFull: confidently full (>= capacity). coalBagHasCoal: holds coal, treating an
+        // unknown count (-1) as "has coal" so the belt still prompts an empty. Erring coal-first.
+        boolean coalBagFull = coalBagCount >= BFConstants.COAL_BAG_CAPACITY;
+        boolean coalBagHasCoal = coalBagCount != 0; // > 0, or unknown (-1)
+
         return BFStateSnapshot.builder()
             .barType(bt)
             .bankOpen(bankOpen)
@@ -257,7 +273,8 @@ public class BlastFurnaceHelperPlugin extends Plugin
             .invOre(invOre)
             .invBars(invBars)
             .freeSlots(freeSlots)
-            .coalBagHasCoal(coalBagFull)
+            .coalBagHasCoal(coalBagHasCoal)
+            .coalBagFull(coalBagFull)
             .furnaceCoal(furnaceCoal)
             .furnaceOre(furnaceOre)
             .furnaceBars(furnaceBars)
@@ -318,13 +335,18 @@ public class BlastFurnaceHelperPlugin extends Plugin
         int itemId = event.getItemId();
         if (itemId == BFConstants.ITEM_COAL_BAG || itemId == BFConstants.ITEM_COAL_BAG_FULL)
         {
+            // Secondary inference from the click (chat messages are authoritative and override).
             if ("Fill".equalsIgnoreCase(option))
             {
-                coalBagFull = true;
+                // The bag absorbs coal from the inventory, up to capacity.
+                ItemContainer inv = client.getItemContainer(InventoryID.INVENTORY);
+                int invCoal = inv != null ? countItem(inv.getItems(), BFConstants.ITEM_COAL) : 0;
+                int prev = Math.max(coalBagCount, 0);
+                coalBagCount = Math.min(prev + invCoal, BFConstants.COAL_BAG_CAPACITY);
             }
             else if ("Empty".equalsIgnoreCase(option))
             {
-                coalBagFull = false;
+                coalBagCount = 0;
             }
         }
 
@@ -334,6 +356,54 @@ public class BlastFurnaceHelperPlugin extends Plugin
         if (config.logActions())
         {
             logClick(event);
+        }
+    }
+
+    // Coal-bag chat messages (authoritative). Examples:
+    //   "The coal bag contains twenty-seven pieces of coal." / "...contains 27 pieces of coal."
+    //   "The coal bag is empty." / "Your coal bag is now empty."
+    //   "The coal bag is now full." / "Your coal bag is already full."
+    private static final Pattern COAL_BAG_COUNT =
+        Pattern.compile("coal bag[^0-9]*?(\\d+) pieces of coal", Pattern.CASE_INSENSITIVE);
+
+    @Subscribe
+    public void onChatMessage(ChatMessage event)
+    {
+        if (event.getType() != ChatMessageType.GAMEMESSAGE
+            && event.getType() != ChatMessageType.SPAM)
+        {
+            return;
+        }
+
+        String msg = Text.removeTags(event.getMessage());
+        String lower = msg.toLowerCase();
+        if (!lower.contains("coal bag"))
+        {
+            return;
+        }
+
+        if (lower.contains("empty"))
+        {
+            coalBagCount = 0;
+            return;
+        }
+        if (lower.contains("full"))
+        {
+            coalBagCount = BFConstants.COAL_BAG_CAPACITY;
+            return;
+        }
+        Matcher m = COAL_BAG_COUNT.matcher(msg);
+        if (m.find())
+        {
+            try
+            {
+                int n = Integer.parseInt(m.group(1));
+                coalBagCount = Math.max(0, Math.min(n, BFConstants.COAL_BAG_CAPACITY));
+            }
+            catch (NumberFormatException ignored)
+            {
+                // Leave the count as-is on parse failure; err coal-first.
+            }
         }
     }
 
@@ -377,9 +447,9 @@ public class BlastFurnaceHelperPlugin extends Plugin
             }
         }
         return String.format(
-            "state[coal=%d ore=%d bars=%d free=%d bag=%s fcoal=%d fbars=%d disp=%d coffer=%d region=%d pos=%s]",
+            "state[coal=%d ore=%d bars=%d free=%d bagCount=%d bagFull=%b fcoal=%d fbars=%d disp=%d coffer=%d region=%d pos=%s]",
             s.getInvCoal(), s.getInvOre(), s.getInvBars(), s.getFreeSlots(),
-            s.isCoalBagHasCoal() ? "full" : "empty", s.getFurnaceCoal(), s.getFurnaceBars(),
+            coalBagCount, s.isCoalBagFull(), s.getFurnaceCoal(), s.getFurnaceBars(),
             s.getDispenserState(), cofferBalance, region, pos);
     }
 
